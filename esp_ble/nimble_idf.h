@@ -2,8 +2,9 @@
  * Heap / NVS / NimBLE host task are IDF contracts, not Klin magic.
  *
  * Peripheral GATT MVP: svc 0xFFF0 / chr 0xFFF1 (read/write/notify).
- * Central MVP: active scan into a fixed table; connect by index.
- * Bonding / GATT client reads / custom UUID tables come later.
+ * Central: active scan + connect; GATT client discover/read/write/subscribe
+ * against the same fixed UUIDs.
+ * Bonding / custom UUID tables come later.
  */
 #pragma once
 
@@ -69,7 +70,8 @@ int klin_ble_scan_name(int index, uint8_t *out, int max_len);
 
 /**
  * Connect as central to scan result `index`. `timeout_ms` for the connection
- * attempt (-1 = NimBLE default / long). Does not perform GATT client ops.
+ * attempt (-1 = NimBLE default / long). GATT client ops need `gattc_discover`
+ * after `central_wait_connected`.
  */
 int klin_ble_central_connect(int index, int timeout_ms);
 
@@ -81,6 +83,38 @@ int klin_ble_central_wait_connected(int timeout_ms);
 
 /** Disconnect central connection (best-effort). */
 int klin_ble_central_disconnect(void);
+
+/**
+ * Discover peer svc 0xFFF0 / chr 0xFFF1 (+ CCCD if present). Blocks.
+ * Requires an active central connection. 0 = ready for read/write.
+ */
+int klin_ble_gattc_discover(int timeout_ms);
+
+/** 1 after successful `gattc_discover` while still connected. */
+int klin_ble_gattc_ready(void);
+
+/** Blocking read of chr 0xFFF1 into the client buffer. */
+int klin_ble_gattc_read(int timeout_ms);
+
+/** Blocking write (with response) to chr 0xFFF1. `len` ≤ 20. */
+int klin_ble_gattc_write(const uint8_t *data, int len, int timeout_ms);
+
+/**
+ * Enable notifications (write CCCD 0x2902 = 0x0001). Fails if peer has no CCCD.
+ */
+int klin_ble_gattc_subscribe(int timeout_ms);
+
+/**
+ * 1 if a notification arrived since last call (clears the flag). Payload is in
+ * the client buffer (`gattc_get` / `gattc_len`).
+ */
+int klin_ble_gattc_notified(void);
+
+/** Copy last read/notify payload. Returns length, or -1 on bad args. */
+int klin_ble_gattc_get(uint8_t *out, int max_len);
+
+/** Length of last read/notify payload (0..=20). */
+int klin_ble_gattc_len(void);
 
 #ifdef __cplusplus
 }
