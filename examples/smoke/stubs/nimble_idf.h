@@ -1,6 +1,9 @@
 #pragma once
 #include <stdint.h>
 int klin_ble_init(void);
+int klin_ble_gatt_uuid16(int svc_uuid16, int chr_uuid16);
+int klin_ble_gatt_svc_uuid16(void);
+int klin_ble_gatt_chr_uuid16(void);
 int klin_ble_advertise(const char *name);
 int klin_ble_stop_advertise(void);
 int klin_ble_connected(void);

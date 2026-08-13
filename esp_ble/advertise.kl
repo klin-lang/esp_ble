@@ -6,12 +6,22 @@
 /// `@v0.3.0` central: active scan (max 16 results) + connect by index.
 /// `@v0.4.0` GATT client: discover / read / write / subscribe on the same UUIDs.
 /// `@v0.5.0` bonding: Just Works pair + NVS store (`bond_enable` / `bond_start`).
+/// `@v0.6.0` custom 16-bit UUIDs via `gatt_uuid16` (before `init`).
 module esp_ble
 
 @[link("nimble_idf.c")]
 @[cinclude("nimble_idf.h")]
 @[cimport, codename("klin_ble_init")]
 fn klin_ble_init(): i32
+
+@[cimport, codename("klin_ble_gatt_uuid16")]
+fn klin_ble_gatt_uuid16(svc_uuid16: i32, chr_uuid16: i32): i32
+
+@[cimport, codename("klin_ble_gatt_svc_uuid16")]
+fn klin_ble_gatt_svc_uuid16(): i32
+
+@[cimport, codename("klin_ble_gatt_chr_uuid16")]
+fn klin_ble_gatt_chr_uuid16(): i32
 
 @[cimport, codename("klin_ble_advertise")]
 fn klin_ble_advertise(name: str): i32
@@ -127,11 +137,11 @@ pub fn err_ok(): i32 {
 }
 
 pub fn gatt_svc_uuid16(): i32 {
-    return 0xFFF0
+    return klin_ble_gatt_svc_uuid16()
 }
 
 pub fn gatt_chr_uuid16(): i32 {
-    return 0xFFF1
+    return klin_ble_gatt_chr_uuid16()
 }
 
 pub fn gatt_value_max(): i32 {
@@ -141,6 +151,11 @@ pub fn gatt_value_max(): i32 {
 /// Max scan results kept (deduped by address).
 pub fn scan_max(): i32 {
     return 16
+}
+
+/// Set 16-bit svc/chr UUIDs. Must run **before** `init` (default `0xFFF0`/`0xFFF1`).
+pub fn gatt_uuid16(svc_uuid16: i32, chr_uuid16: i32): i32 {
+    return klin_ble_gatt_uuid16(svc_uuid16, chr_uuid16)
 }
 
 pub fn init(): i32 {

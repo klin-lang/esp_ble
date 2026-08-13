@@ -8,8 +8,31 @@ static int s_scan_n;
 static uint8_t s_addr[6] = {1, 2, 3, 4, 5, 6};
 static char s_scan_name[] = "stub";
 static int s_central;
+static uint16_t s_svc_u = 0xFFF0;
+static uint16_t s_chr_u = 0xFFF1;
+static int s_inited_stub;
 
-int klin_ble_init(void) { return 0; }
+int klin_ble_gatt_uuid16(int svc_uuid16, int chr_uuid16)
+{
+    if (s_inited_stub) {
+        return -1;
+    }
+    if (svc_uuid16 <= 0 || svc_uuid16 > 0xFFFF || chr_uuid16 <= 0 ||
+        chr_uuid16 > 0xFFFF) {
+        return -1;
+    }
+    s_svc_u = (uint16_t)svc_uuid16;
+    s_chr_u = (uint16_t)chr_uuid16;
+    return 0;
+}
+int klin_ble_gatt_svc_uuid16(void) { return (int)s_svc_u; }
+int klin_ble_gatt_chr_uuid16(void) { return (int)s_chr_u; }
+
+int klin_ble_init(void)
+{
+    s_inited_stub = 1;
+    return 0;
+}
 int klin_ble_advertise(const char *name)
 {
     (void)name;
