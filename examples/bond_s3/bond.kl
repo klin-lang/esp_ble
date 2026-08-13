@@ -1,0 +1,47 @@
+// ESP32-S3 NimBLE Just Works bonding via klin-lang/esp_ble @v0.5.0.
+//   make emit && make build && make flash
+// Phone / central: connect to "klin-bond", accept pair (no PIN).
+import "../../esp_ble" ble
+
+@[cexport, codename("klin_app_main")]
+fn app_main_klin() {
+  let mut e = ble.init()
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.bond_enable()
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.advertise("klin-bond")
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.wait_connected(120000)
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.bond_start()
+  if e != ble.err_ok() {
+    return
+  }
+  e = ble.wait_bonded(60000)
+  if e != ble.err_ok() {
+    return
+  }
+
+  while ble.connected() {
+    let mut i: i32 = 0
+    while i < 20000000 {
+      i = i + 1
+    }
+  }
+}
+
+fn main() {
+  app_main_klin()
+}

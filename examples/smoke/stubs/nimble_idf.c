@@ -152,3 +152,32 @@ int klin_ble_gattc_get(uint8_t *out, int max_len)
     return klin_ble_gatt_get(out, max_len);
 }
 int klin_ble_gattc_len(void) { return s_len; }
+
+static int s_bond_on;
+static int s_bond_ok;
+
+int klin_ble_bond_enable(void)
+{
+    s_bond_on = 1;
+    return 0;
+}
+int klin_ble_bond_start(void)
+{
+    if (!s_bond_on || !s_central) {
+        return -1;
+    }
+    s_bond_ok = 1;
+    return 0;
+}
+int klin_ble_bonded(void) { return s_bond_ok; }
+int klin_ble_wait_bonded(int timeout_ms)
+{
+    (void)timeout_ms;
+    return s_bond_ok ? 0 : -1;
+}
+int klin_ble_bond_count(void) { return s_bond_ok ? 1 : 0; }
+int klin_ble_bond_clear(void)
+{
+    s_bond_ok = 0;
+    return 0;
+}

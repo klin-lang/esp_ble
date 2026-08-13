@@ -1,5 +1,5 @@
-/* NimBLE peripheral GATT + central scan/connect + GATT client for Klin
- * (ESP-IDF v5.x). Requires: CONFIG_BT_ENABLED + CONFIG_BT_NIMBLE_ENABLED
+/* NimBLE peripheral GATT + central scan/connect + GATT client + bonding
+ * for Klin (ESP-IDF v5.x). Requires: CONFIG_BT_ENABLED + CONFIG_BT_NIMBLE_ENABLED
  * (+ central/observer roles for scan/connect/client).
  */
 #include "nimble_idf.h"
@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "host/ble_hs.h"
+#include "host/ble_store.h"
 #include "host/ble_uuid.h"
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
@@ -19,12 +20,15 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
+void ble_store_config_init(void);
+
 #define KLIN_BLE_SYNC_BIT           BIT0
 #define KLIN_BLE_CONNECTED_BIT      BIT1
 #define KLIN_BLE_SCAN_DONE_BIT      BIT2
 #define KLIN_BLE_CENTRAL_CONN_BIT   BIT3
 #define KLIN_BLE_GATTC_DISC_BIT     BIT4
 #define KLIN_BLE_GATTC_OP_BIT       BIT5
+#define KLIN_BLE_BOND_BIT           BIT6
 #define KLIN_BLE_NAME_MAX           28
 #define KLIN_BLE_CCCD_UUID16        0x2902
 
@@ -67,6 +71,10 @@ static uint8_t s_gattc_buf[KLIN_BLE_GATT_VALUE_MAX];
 static uint16_t s_gattc_buf_len;
 static int s_gattc_notified;
 
+/* Bonding / pairing (Just Works). Keys live in IDF NVS via ble_store. */
+static int s_bond_enabled;
+static int s_bonded; /* current link encrypted+bonded after ENC_CHANGE */
+
 static const ble_uuid16_t s_svc_uuid =
     BLE_UUID16_INIT(KLIN_BLE_GATT_SVC_UUID16);
 static const ble_uuid16_t s_chr_uuid =
@@ -98,6 +106,26 @@ static void klin_ble_gattc_reset(void)
     s_gattc_buf_len = 0;
     s_gattc_notified = 0;
     memset(s_gattc_buf, 0, sizeof(s_gattc_buf));
+}
+
+static uint16_t klin_ble_active_conn(void)
+{
+    if (s_central_connected &&
+        s_central_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        return s_central_conn_handle;
+    }
+    if (s_connected && s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        return s_conn_handle;
+    }
+    return BLE_HS_CONN_HANDLE_NONE;
+}
+
+static void klin_ble_bond_link_reset(void)
+{
+    s_bonded = 0;
+    if (s_ble_events != NULL) {
+        xEventGroupClearBits(s_ble_events, KLIN_BLE_BOND_BIT);
+    }
 }
 
 static int klin_ble_gattc_wait_bit(EventBits_t bit, int timeout_ms)
@@ -487,6 +515,7 @@ static int klin_ble_gap_event(struct ble_gap_event *event, void *arg)
             s_central_connected = 0;
             s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
             klin_ble_gattc_reset();
+            klin_ble_bond_link_reset();
             if (s_ble_events != NULL) {
                 xEventGroupClearBits(s_ble_events, KLIN_BLE_CENTRAL_CONN_BIT);
             }
@@ -494,6 +523,7 @@ static int klin_ble_gap_event(struct ble_gap_event *event, void *arg)
             s_connected = 0;
             s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
             s_gatt_notify_enabled = 0;
+            klin_ble_bond_link_reset();
             if (s_ble_events != NULL) {
                 xEventGroupClearBits(s_ble_events, KLIN_BLE_CONNECTED_BIT);
             }
@@ -502,6 +532,25 @@ static int klin_ble_gap_event(struct ble_gap_event *event, void *arg)
             }
         }
         return 0;
+
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        if (event->enc_change.status == 0) {
+            s_bonded = 1;
+            if (s_ble_events != NULL) {
+                xEventGroupSetBits(s_ble_events, KLIN_BLE_BOND_BIT);
+            }
+        } else {
+            s_bonded = 0;
+        }
+        return 0;
+
+    case BLE_GAP_EVENT_REPEAT_PAIRING:
+        /* Replace old bond (explicit convenience policy for this MVP). */
+        rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
+        if (rc == 0) {
+            ble_store_util_delete_peer(&desc.peer_id_addr);
+        }
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
 
     case BLE_GAP_EVENT_NOTIFY_RX: {
         uint16_t n;
@@ -601,7 +650,7 @@ int klin_ble_init(void)
 
     ble_hs_cfg.reset_cb = klin_ble_on_reset;
     ble_hs_cfg.sync_cb = klin_ble_on_sync;
-    ble_hs_cfg.store_status_cb = NULL;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
@@ -615,6 +664,9 @@ int klin_ble_init(void)
         return rc;
     }
 
+    /* NVS-backed key store (used when bond_enable + bond_start). */
+    ble_store_config_init();
+
     s_synced = 0;
     s_advertising = 0;
     s_connected = 0;
@@ -622,6 +674,8 @@ int klin_ble_init(void)
     s_restart_adv = 0;
     s_scanning = 0;
     s_scan_count = 0;
+    s_bond_enabled = 0;
+    s_bonded = 0;
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_gatt_len = 0;
@@ -630,9 +684,11 @@ int klin_ble_init(void)
     memset(s_gatt_value, 0, sizeof(s_gatt_value));
     memset(s_scan, 0, sizeof(s_scan));
     s_name[0] = '\0';
+    klin_ble_gattc_reset();
     xEventGroupClearBits(s_ble_events,
                          KLIN_BLE_SYNC_BIT | KLIN_BLE_CONNECTED_BIT |
-                             KLIN_BLE_SCAN_DONE_BIT | KLIN_BLE_CENTRAL_CONN_BIT);
+                             KLIN_BLE_SCAN_DONE_BIT | KLIN_BLE_CENTRAL_CONN_BIT |
+                             KLIN_BLE_BOND_BIT);
 
     nimble_port_freertos_init(klin_ble_host_task);
     s_inited = 1;
@@ -1187,4 +1243,99 @@ int klin_ble_gattc_get(uint8_t *out, int max_len)
 int klin_ble_gattc_len(void)
 {
     return (int)s_gattc_buf_len;
+}
+
+int klin_ble_bond_enable(void)
+{
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+
+    /* Just Works: no display/keyboard; bonding stores LTK (+ IRK) in NVS. */
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_mitm = 0;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_our_key_dist =
+        BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist =
+        BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    s_bond_enabled = 1;
+    return (int)ESP_OK;
+}
+
+int klin_ble_bond_start(void)
+{
+    uint16_t conn;
+    int rc;
+
+    if (!s_inited || !s_bond_enabled) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    conn = klin_ble_active_conn();
+    if (conn == BLE_HS_CONN_HANDLE_NONE) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+
+    klin_ble_bond_link_reset();
+    rc = ble_gap_security_initiate(conn);
+    return rc;
+}
+
+int klin_ble_bonded(void)
+{
+    return s_bonded ? 1 : 0;
+}
+
+int klin_ble_wait_bonded(int timeout_ms)
+{
+    TickType_t ticks;
+    EventBits_t bits;
+
+    if (!s_inited || s_ble_events == NULL) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (s_bonded) {
+        return (int)ESP_OK;
+    }
+
+    if (timeout_ms < 0) {
+        ticks = portMAX_DELAY;
+    } else {
+        ticks = pdMS_TO_TICKS((uint32_t)timeout_ms);
+    }
+
+    bits = xEventGroupWaitBits(s_ble_events, KLIN_BLE_BOND_BIT, pdFALSE,
+                               pdFALSE, ticks);
+    if (bits & KLIN_BLE_BOND_BIT) {
+        return (int)ESP_OK;
+    }
+    return (int)ESP_ERR_TIMEOUT;
+}
+
+int klin_ble_bond_count(void)
+{
+    int n = 0;
+    int rc;
+
+    if (!s_inited) {
+        return 0;
+    }
+    rc = ble_store_util_count(BLE_STORE_OBJ_TYPE_PEER_SEC, &n);
+    if (rc != 0) {
+        return 0;
+    }
+    return n;
+}
+
+int klin_ble_bond_clear(void)
+{
+    int rc;
+
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    rc = ble_store_clear();
+    klin_ble_bond_link_reset();
+    return rc;
 }

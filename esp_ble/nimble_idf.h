@@ -4,7 +4,8 @@
  * Peripheral GATT MVP: svc 0xFFF0 / chr 0xFFF1 (read/write/notify).
  * Central: active scan + connect; GATT client discover/read/write/subscribe
  * against the same fixed UUIDs.
- * Bonding / custom UUID tables come later.
+ * Bonding: Just Works (`bond_enable` + `bond_start`); keys in IDF NVS.
+ * Custom UUID tables / passkey IO / mesh come later.
  */
 #pragma once
 
@@ -115,6 +116,30 @@ int klin_ble_gattc_get(uint8_t *out, int max_len);
 
 /** Length of last read/notify payload (0..=20). */
 int klin_ble_gattc_len(void);
+
+/**
+ * Enable Just Works bonding (SM config). Call after `init`, before
+ * `bond_start`. Keys are stored in NVS via NimBLE ble_store.
+ */
+int klin_ble_bond_enable(void);
+
+/**
+ * Start pairing/encryption on the active connection (central preferred,
+ * else peripheral). Requires `bond_enable`. Completes via ENC_CHANGE.
+ */
+int klin_ble_bond_start(void);
+
+/** 1 after successful encryption on the current link. */
+int klin_ble_bonded(void);
+
+/** Block until bonded/encrypted or timeout. 0 = OK. */
+int klin_ble_wait_bonded(int timeout_ms);
+
+/** Number of stored peer bonds (NVS). */
+int klin_ble_bond_count(void);
+
+/** Delete all stored bonds. */
+int klin_ble_bond_clear(void);
 
 #ifdef __cplusplus
 }

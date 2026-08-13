@@ -5,6 +5,7 @@
 /// `@v0.2.0` GATT server: svc `0xFFF0` / chr `0xFFF1` (R/W/Notify), max 20 bytes.
 /// `@v0.3.0` central: active scan (max 16 results) + connect by index.
 /// `@v0.4.0` GATT client: discover / read / write / subscribe on the same UUIDs.
+/// `@v0.5.0` bonding: Just Works pair + NVS store (`bond_enable` / `bond_start`).
 module esp_ble
 
 @[link("nimble_idf.c")]
@@ -101,6 +102,24 @@ fn klin_ble_gattc_get(out: *mut u8, max_len: i32): i32
 
 @[cimport, codename("klin_ble_gattc_len")]
 fn klin_ble_gattc_len(): i32
+
+@[cimport, codename("klin_ble_bond_enable")]
+fn klin_ble_bond_enable(): i32
+
+@[cimport, codename("klin_ble_bond_start")]
+fn klin_ble_bond_start(): i32
+
+@[cimport, codename("klin_ble_bonded")]
+fn klin_ble_bonded(): i32
+
+@[cimport, codename("klin_ble_wait_bonded")]
+fn klin_ble_wait_bonded(timeout_ms: i32): i32
+
+@[cimport, codename("klin_ble_bond_count")]
+fn klin_ble_bond_count(): i32
+
+@[cimport, codename("klin_ble_bond_clear")]
+fn klin_ble_bond_clear(): i32
 
 /// `ESP_OK` / NimBLE success (0).
 pub fn err_ok(): i32 {
@@ -255,4 +274,30 @@ pub fn gattc_get(out: *mut u8, max_len: i32): i32 {
 
 pub fn gattc_len(): i32 {
     return klin_ble_gattc_len()
+}
+
+/// Just Works SM + bonding flags (keys → NVS). Call after `init`.
+pub fn bond_enable(): i32 {
+    return klin_ble_bond_enable()
+}
+
+/// Start pairing/encryption on the active link.
+pub fn bond_start(): i32 {
+    return klin_ble_bond_start()
+}
+
+pub fn bonded(): bool {
+    return klin_ble_bonded() != 0
+}
+
+pub fn wait_bonded(timeout_ms: i32): i32 {
+    return klin_ble_wait_bonded(timeout_ms)
+}
+
+pub fn bond_count(): i32 {
+    return klin_ble_bond_count()
+}
+
+pub fn bond_clear(): i32 {
+    return klin_ble_bond_clear()
 }
