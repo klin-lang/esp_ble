@@ -1,9 +1,6 @@
-/* NimBLE peripheral + GATT MVP for Klin under ESP-IDF v5.x.
- * Requires sdkconfig: CONFIG_BT_ENABLED + CONFIG_BT_NIMBLE_ENABLED.
- *
- * Fixed GATT (documented):
- *   service 0xFFF0, characteristic 0xFFF1 — read | write | notify
- *   value buffer max KLIN_BLE_GATT_VALUE_MAX bytes (caller copies in/out)
+/* NimBLE peripheral GATT + central scan/connect for Klin (ESP-IDF v5.x).
+ * Requires: CONFIG_BT_ENABLED + CONFIG_BT_NIMBLE_ENABLED
+ * (+ central/observer roles for scan/connect).
  */
 #include "nimble_idf.h"
 
@@ -22,24 +19,39 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
-#define KLIN_BLE_SYNC_BIT      BIT0
-#define KLIN_BLE_CONNECTED_BIT BIT1
-#define KLIN_BLE_NAME_MAX      28
+#define KLIN_BLE_SYNC_BIT           BIT0
+#define KLIN_BLE_CONNECTED_BIT      BIT1
+#define KLIN_BLE_SCAN_DONE_BIT      BIT2
+#define KLIN_BLE_CENTRAL_CONN_BIT   BIT3
+#define KLIN_BLE_NAME_MAX           28
+
+typedef struct {
+    ble_addr_t addr;
+    int8_t rssi;
+    char name[KLIN_BLE_SCAN_NAME_MAX];
+} klin_ble_scan_row_t;
 
 static EventGroupHandle_t s_ble_events;
 static int s_inited;
 static int s_synced;
 static int s_advertising;
-static int s_connected;
+static int s_connected;          /* peripheral: peer connected to us */
+static int s_central_connected;  /* we initiated the link */
+static int s_restart_adv;        /* peripheral policy after disconnect */
+static int s_scanning;
 static uint8_t s_own_addr_type;
 static char s_name[KLIN_BLE_NAME_MAX];
 
 static uint16_t s_conn_handle;
+static uint16_t s_central_conn_handle;
 static uint16_t s_chr_val_handle;
 static uint8_t s_gatt_value[KLIN_BLE_GATT_VALUE_MAX];
 static uint16_t s_gatt_len;
 static int s_gatt_written;
 static int s_gatt_notify_enabled;
+
+static klin_ble_scan_row_t s_scan[KLIN_BLE_SCAN_MAX];
+static int s_scan_count;
 
 static const ble_uuid16_t s_svc_uuid =
     BLE_UUID16_INIT(KLIN_BLE_GATT_SVC_UUID16);
@@ -59,6 +71,61 @@ static void klin_ble_on_reset(int reason)
 }
 
 static int klin_ble_gap_event(struct ble_gap_event *event, void *arg);
+
+static int klin_ble_wait_sync(void)
+{
+    TickType_t ticks = pdMS_TO_TICKS(5000);
+    EventBits_t bits;
+
+    bits = xEventGroupWaitBits(s_ble_events, KLIN_BLE_SYNC_BIT, pdFALSE,
+                               pdFALSE, ticks);
+    if ((bits & KLIN_BLE_SYNC_BIT) == 0) {
+        return (int)ESP_ERR_TIMEOUT;
+    }
+    return (int)ESP_OK;
+}
+
+static int klin_ble_scan_find(const ble_addr_t *addr)
+{
+    int i;
+    for (i = 0; i < s_scan_count; i++) {
+        if (s_scan[i].addr.type == addr->type &&
+            memcmp(s_scan[i].addr.val, addr->val, 6) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void klin_ble_scan_add(const struct ble_gap_disc_desc *disc)
+{
+    struct ble_hs_adv_fields fields;
+    int idx;
+    int rc;
+
+    idx = klin_ble_scan_find(&disc->addr);
+    if (idx < 0) {
+        if (s_scan_count >= KLIN_BLE_SCAN_MAX) {
+            return;
+        }
+        idx = s_scan_count++;
+        memset(&s_scan[idx], 0, sizeof(s_scan[idx]));
+        s_scan[idx].addr = disc->addr;
+    }
+
+    s_scan[idx].rssi = disc->rssi;
+
+    memset(&fields, 0, sizeof(fields));
+    rc = ble_hs_adv_parse_fields(&fields, disc->data, disc->length_data);
+    if (rc == 0 && fields.name != NULL && fields.name_len > 0) {
+        size_t n = fields.name_len;
+        if (n >= KLIN_BLE_SCAN_NAME_MAX) {
+            n = KLIN_BLE_SCAN_NAME_MAX - 1;
+        }
+        memcpy(s_scan[idx].name, fields.name, n);
+        s_scan[idx].name[n] = '\0';
+    }
+}
 
 static int klin_ble_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
                                 struct ble_gatt_access_ctxt *ctxt, void *arg)
@@ -146,7 +213,6 @@ static int klin_ble_start_advertise(void)
 
     rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
-        /* Adv payload may not fit name + UUID — retry name-only. */
         memset(&fields, 0, sizeof(fields));
         fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
         if (s_name[0] != '\0') {
@@ -171,36 +237,64 @@ static int klin_ble_start_advertise(void)
         return rc;
     }
     s_advertising = 1;
+    s_restart_adv = 1;
     return 0;
 }
 
 static int klin_ble_gap_event(struct ble_gap_event *event, void *arg)
 {
+    struct ble_gap_conn_desc desc;
+    int rc;
+
     (void)arg;
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
-        if (event->connect.status == 0) {
+        if (event->connect.status != 0) {
+            if (s_restart_adv) {
+                (void)klin_ble_start_advertise();
+            }
+            return 0;
+        }
+        rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
+        if (rc != 0) {
+            return 0;
+        }
+        if (desc.role == BLE_GAP_ROLE_MASTER) {
+            s_central_connected = 1;
+            s_central_conn_handle = event->connect.conn_handle;
+            s_scanning = 0;
+            if (s_ble_events != NULL) {
+                xEventGroupSetBits(s_ble_events, KLIN_BLE_CENTRAL_CONN_BIT);
+            }
+        } else {
             s_connected = 1;
             s_advertising = 0;
             s_conn_handle = event->connect.conn_handle;
             if (s_ble_events != NULL) {
                 xEventGroupSetBits(s_ble_events, KLIN_BLE_CONNECTED_BIT);
             }
-        } else {
-            s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
-            (void)klin_ble_start_advertise();
         }
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        s_connected = 0;
-        s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
-        s_gatt_notify_enabled = 0;
-        if (s_ble_events != NULL) {
-            xEventGroupClearBits(s_ble_events, KLIN_BLE_CONNECTED_BIT);
+        if (event->disconnect.conn.role == BLE_GAP_ROLE_MASTER ||
+            event->disconnect.conn.conn_handle == s_central_conn_handle) {
+            s_central_connected = 0;
+            s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+            if (s_ble_events != NULL) {
+                xEventGroupClearBits(s_ble_events, KLIN_BLE_CENTRAL_CONN_BIT);
+            }
+        } else {
+            s_connected = 0;
+            s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+            s_gatt_notify_enabled = 0;
+            if (s_ble_events != NULL) {
+                xEventGroupClearBits(s_ble_events, KLIN_BLE_CONNECTED_BIT);
+            }
+            if (s_restart_adv) {
+                (void)klin_ble_start_advertise();
+            }
         }
-        /* Documented: peripheral restarts advertising after disconnect. */
-        (void)klin_ble_start_advertise();
         return 0;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -210,6 +304,17 @@ static int klin_ble_gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_SUBSCRIBE:
         if (event->subscribe.attr_handle == s_chr_val_handle) {
             s_gatt_notify_enabled = event->subscribe.cur_notify ? 1 : 0;
+        }
+        return 0;
+
+    case BLE_GAP_EVENT_DISC:
+        klin_ble_scan_add(&event->disc);
+        return 0;
+
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+        s_scanning = 0;
+        if (s_ble_events != NULL) {
+            xEventGroupSetBits(s_ble_events, KLIN_BLE_SCAN_DONE_BIT);
         }
         return 0;
 
@@ -272,7 +377,6 @@ int klin_ble_init(void)
 
     ble_hs_cfg.reset_cb = klin_ble_on_reset;
     ble_hs_cfg.sync_cb = klin_ble_on_sync;
-    /* No NVS bonding store in MVP — pairing/bonding later. */
     ble_hs_cfg.store_status_cb = NULL;
 
     ble_svc_gap_init();
@@ -290,14 +394,21 @@ int klin_ble_init(void)
     s_synced = 0;
     s_advertising = 0;
     s_connected = 0;
+    s_central_connected = 0;
+    s_restart_adv = 0;
+    s_scanning = 0;
+    s_scan_count = 0;
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_gatt_len = 0;
     s_gatt_written = 0;
     s_gatt_notify_enabled = 0;
     memset(s_gatt_value, 0, sizeof(s_gatt_value));
+    memset(s_scan, 0, sizeof(s_scan));
     s_name[0] = '\0';
     xEventGroupClearBits(s_ble_events,
-                         KLIN_BLE_SYNC_BIT | KLIN_BLE_CONNECTED_BIT);
+                         KLIN_BLE_SYNC_BIT | KLIN_BLE_CONNECTED_BIT |
+                             KLIN_BLE_SCAN_DONE_BIT | KLIN_BLE_CENTRAL_CONN_BIT);
 
     nimble_port_freertos_init(klin_ble_host_task);
     s_inited = 1;
@@ -306,8 +417,6 @@ int klin_ble_init(void)
 
 int klin_ble_advertise(const char *name)
 {
-    TickType_t ticks;
-    EventBits_t bits;
     int rc;
 
     if (!s_inited) {
@@ -326,11 +435,14 @@ int klin_ble_advertise(const char *name)
         return rc;
     }
 
-    ticks = pdMS_TO_TICKS(5000);
-    bits = xEventGroupWaitBits(s_ble_events, KLIN_BLE_SYNC_BIT, pdFALSE,
-                               pdFALSE, ticks);
-    if ((bits & KLIN_BLE_SYNC_BIT) == 0) {
-        return (int)ESP_ERR_TIMEOUT;
+    rc = klin_ble_wait_sync();
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (s_scanning) {
+        (void)ble_gap_disc_cancel();
+        s_scanning = 0;
     }
 
     return klin_ble_start_advertise();
@@ -343,6 +455,7 @@ int klin_ble_stop_advertise(void)
     if (!s_inited) {
         return (int)ESP_ERR_INVALID_STATE;
     }
+    s_restart_adv = 0;
     rc = ble_gap_adv_stop();
     s_advertising = 0;
     return rc;
@@ -388,8 +501,14 @@ int klin_ble_stop(void)
     if (!s_inited) {
         return (int)ESP_ERR_INVALID_STATE;
     }
+    s_restart_adv = 0;
     (void)ble_gap_adv_stop();
+    (void)ble_gap_disc_cancel();
+    if (s_central_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        (void)ble_gap_terminate(s_central_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
     s_advertising = 0;
+    s_scanning = 0;
     rc = nimble_port_stop();
     if (rc == 0) {
         nimble_port_deinit();
@@ -397,7 +516,9 @@ int klin_ble_stop(void)
     s_inited = 0;
     s_synced = 0;
     s_connected = 0;
+    s_central_connected = 0;
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_gatt_notify_enabled = 0;
     return rc;
 }
@@ -468,4 +589,225 @@ int klin_ble_gatt_written(void)
     int w = s_gatt_written;
     s_gatt_written = 0;
     return w ? 1 : 0;
+}
+
+int klin_ble_scan_start(int duration_ms)
+{
+    struct ble_gap_disc_params params;
+    TickType_t ticks;
+    EventBits_t bits;
+    int32_t dur;
+    int rc;
+
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (duration_ms <= 0) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+
+    rc = klin_ble_wait_sync();
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* Central path: do not auto-restart peripheral advertising. */
+    s_restart_adv = 0;
+    if (s_advertising) {
+        (void)ble_gap_adv_stop();
+        s_advertising = 0;
+    }
+    if (s_scanning) {
+        (void)ble_gap_disc_cancel();
+        s_scanning = 0;
+    }
+
+    s_scan_count = 0;
+    memset(s_scan, 0, sizeof(s_scan));
+    xEventGroupClearBits(s_ble_events, KLIN_BLE_SCAN_DONE_BIT);
+
+    memset(&params, 0, sizeof(params));
+    /* Units: 0.625 ms. 0x10/0x10 ≈ 10 ms interval/window (active). */
+    params.itvl = 0x0010;
+    params.window = 0x0010;
+    params.filter_policy = 0; /* no whitelist */
+    params.limited = 0;
+    params.passive = 0; /* active scan → scan RSP names */
+    params.filter_duplicates = 1;
+
+    /* NimBLE duration unit is 10 ms. */
+    dur = (int32_t)((duration_ms + 9) / 10);
+    if (dur < 1) {
+        dur = 1;
+    }
+
+    s_scanning = 1;
+    rc = ble_gap_disc(s_own_addr_type, dur, &params, klin_ble_gap_event, NULL);
+    if (rc != 0) {
+        s_scanning = 0;
+        return rc;
+    }
+
+    ticks = pdMS_TO_TICKS((uint32_t)duration_ms + 2000u);
+    bits = xEventGroupWaitBits(s_ble_events, KLIN_BLE_SCAN_DONE_BIT, pdFALSE,
+                               pdFALSE, ticks);
+    s_scanning = 0;
+    if ((bits & KLIN_BLE_SCAN_DONE_BIT) == 0) {
+        (void)ble_gap_disc_cancel();
+        return (int)ESP_ERR_TIMEOUT;
+    }
+    return (int)ESP_OK;
+}
+
+int klin_ble_scan_stop(void)
+{
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (!s_scanning) {
+        return (int)ESP_OK;
+    }
+    (void)ble_gap_disc_cancel();
+    s_scanning = 0;
+    if (s_ble_events != NULL) {
+        xEventGroupSetBits(s_ble_events, KLIN_BLE_SCAN_DONE_BIT);
+    }
+    return (int)ESP_OK;
+}
+
+int klin_ble_scan_count(void)
+{
+    return s_scan_count;
+}
+
+int klin_ble_scan_rssi(int index)
+{
+    if (index < 0 || index >= s_scan_count) {
+        return 0;
+    }
+    return (int)s_scan[index].rssi;
+}
+
+int klin_ble_scan_addr_type(int index)
+{
+    if (index < 0 || index >= s_scan_count) {
+        return -1;
+    }
+    return (int)s_scan[index].addr.type;
+}
+
+int klin_ble_scan_addr(int index, uint8_t *out6)
+{
+    if (index < 0 || index >= s_scan_count || out6 == NULL) {
+        return -1;
+    }
+    memcpy(out6, s_scan[index].addr.val, 6);
+    return 0;
+}
+
+int klin_ble_scan_name(int index, uint8_t *out, int max_len)
+{
+    size_t n;
+
+    if (index < 0 || index >= s_scan_count || out == NULL || max_len < 0) {
+        return -1;
+    }
+    n = strlen(s_scan[index].name);
+    if ((int)n > max_len) {
+        n = (size_t)max_len;
+    }
+    if (n > 0) {
+        memcpy(out, s_scan[index].name, n);
+    }
+    return (int)n;
+}
+
+int klin_ble_central_connect(int index, int timeout_ms)
+{
+    int32_t to;
+    int rc;
+
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (index < 0 || index >= s_scan_count) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+
+    rc = klin_ble_wait_sync();
+    if (rc != 0) {
+        return rc;
+    }
+
+    s_restart_adv = 0;
+    if (s_advertising) {
+        (void)ble_gap_adv_stop();
+        s_advertising = 0;
+    }
+    if (s_scanning) {
+        (void)ble_gap_disc_cancel();
+        s_scanning = 0;
+    }
+    if (s_central_connected &&
+        s_central_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        (void)ble_gap_terminate(s_central_conn_handle,
+                                BLE_ERR_REM_USER_CONN_TERM);
+        s_central_connected = 0;
+        s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    }
+
+    xEventGroupClearBits(s_ble_events, KLIN_BLE_CENTRAL_CONN_BIT);
+
+    if (timeout_ms < 0) {
+        to = BLE_HS_FOREVER;
+    } else {
+        to = (int32_t)timeout_ms;
+    }
+
+    rc = ble_gap_connect(s_own_addr_type, &s_scan[index].addr, to, NULL,
+                         klin_ble_gap_event, NULL);
+    return rc;
+}
+
+int klin_ble_central_connected(void)
+{
+    return s_central_connected ? 1 : 0;
+}
+
+int klin_ble_central_wait_connected(int timeout_ms)
+{
+    TickType_t ticks;
+    EventBits_t bits;
+
+    if (!s_inited || s_ble_events == NULL) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+
+    if (timeout_ms < 0) {
+        ticks = portMAX_DELAY;
+    } else {
+        ticks = pdMS_TO_TICKS((uint32_t)timeout_ms);
+    }
+
+    bits = xEventGroupWaitBits(s_ble_events, KLIN_BLE_CENTRAL_CONN_BIT, pdFALSE,
+                               pdFALSE, ticks);
+    if (bits & KLIN_BLE_CENTRAL_CONN_BIT) {
+        return (int)ESP_OK;
+    }
+    return (int)ESP_ERR_TIMEOUT;
+}
+
+int klin_ble_central_disconnect(void)
+{
+    int rc;
+
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (!s_central_connected ||
+        s_central_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        return (int)ESP_OK;
+    }
+    rc = ble_gap_terminate(s_central_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    return rc;
 }

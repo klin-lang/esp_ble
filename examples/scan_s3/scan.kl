@@ -1,0 +1,48 @@
+// ESP32-S3 NimBLE central scan via klin-lang/esp_ble @v0.3.0.
+//   make emit && make build && make flash
+// Scans 5s, prints count via busy-wait (no UART helper), connects to index 0
+// if any result exists (GAP only — no GATT client yet).
+import "../../esp_ble" ble
+
+@[cexport, codename("klin_app_main")]
+fn app_main_klin() {
+  let mut e = ble.init()
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.scan_start(5000)
+  if e != ble.err_ok() {
+    return
+  }
+
+  let n = ble.scan_count()
+  if n < 1 {
+    while true {
+      let mut i: i32 = 0
+      while i < 20000000 {
+        i = i + 1
+      }
+    }
+  }
+
+  e = ble.central_connect(0, 10000)
+  if e != ble.err_ok() {
+    return
+  }
+  e = ble.central_wait_connected(15000)
+  if e != ble.err_ok() {
+    return
+  }
+
+  while ble.central_connected() {
+    let mut i: i32 = 0
+    while i < 20000000 {
+      i = i + 1
+    }
+  }
+}
+
+fn main() {
+  app_main_klin()
+}

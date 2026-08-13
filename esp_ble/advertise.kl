@@ -1,9 +1,9 @@
-/// ESP-IDF NimBLE peripheral — thin Klin surface over `nimble_idf.c`.
+/// ESP-IDF NimBLE — thin Klin surface over `nimble_idf.c`.
 /// Radio silicon + IDF NimBLE host task; Klin does not hide those costs.
 /// Not part of `machine_esp`. Sibling of `esp_wifi` / `esp_eth`.
 ///
-/// GATT MVP (`@v0.2.0`): fixed service `0xFFF0`, char `0xFFF1`
-/// (read / write / notify), value buffer max 20 bytes.
+/// `@v0.2.0` GATT: svc `0xFFF0` / chr `0xFFF1` (R/W/Notify), max 20 bytes.
+/// `@v0.3.0` central: active scan (max 16 results) + connect by index.
 module esp_ble
 
 @[link("nimble_idf.c")]
@@ -44,32 +44,65 @@ fn klin_ble_gatt_notify(): i32
 @[cimport, codename("klin_ble_gatt_written")]
 fn klin_ble_gatt_written(): i32
 
+@[cimport, codename("klin_ble_scan_start")]
+fn klin_ble_scan_start(duration_ms: i32): i32
+
+@[cimport, codename("klin_ble_scan_stop")]
+fn klin_ble_scan_stop(): i32
+
+@[cimport, codename("klin_ble_scan_count")]
+fn klin_ble_scan_count(): i32
+
+@[cimport, codename("klin_ble_scan_rssi")]
+fn klin_ble_scan_rssi(index: i32): i32
+
+@[cimport, codename("klin_ble_scan_addr_type")]
+fn klin_ble_scan_addr_type(index: i32): i32
+
+@[cimport, codename("klin_ble_scan_addr")]
+fn klin_ble_scan_addr(index: i32, out6: *mut u8): i32
+
+@[cimport, codename("klin_ble_scan_name")]
+fn klin_ble_scan_name(index: i32, out: *mut u8, max_len: i32): i32
+
+@[cimport, codename("klin_ble_central_connect")]
+fn klin_ble_central_connect(index: i32, timeout_ms: i32): i32
+
+@[cimport, codename("klin_ble_central_connected")]
+fn klin_ble_central_connected(): i32
+
+@[cimport, codename("klin_ble_central_wait_connected")]
+fn klin_ble_central_wait_connected(timeout_ms: i32): i32
+
+@[cimport, codename("klin_ble_central_disconnect")]
+fn klin_ble_central_disconnect(): i32
+
 /// `ESP_OK` / NimBLE success (0).
 pub fn err_ok(): i32 {
     return 0
 }
 
-/// Primary service UUID (16-bit) — fixed for MVP.
 pub fn gatt_svc_uuid16(): i32 {
     return 0xFFF0
 }
 
-/// Characteristic UUID (16-bit) — fixed for MVP.
 pub fn gatt_chr_uuid16(): i32 {
     return 0xFFF1
 }
 
-/// Max GATT value length (bytes).
 pub fn gatt_value_max(): i32 {
     return 20
 }
 
-/// NVS + NimBLE port + GAP/GATT registration + host task. Returns `esp_err_t` as `i32` (0 = OK).
+/// Max scan results kept (deduped by address).
+pub fn scan_max(): i32 {
+    return 16
+}
+
 pub fn init(): i32 {
     return klin_ble_init()
 }
 
-/// Undirected connectable advertise with GAP name (copied in C).
 pub fn advertise(name: str): i32 {
     return klin_ble_advertise(name)
 }
@@ -78,6 +111,7 @@ pub fn stop_advertise(): i32 {
     return klin_ble_stop_advertise()
 }
 
+/// Peripheral: a peer is connected to us.
 pub fn connected(): bool {
     return klin_ble_connected() != 0
 }
@@ -86,7 +120,7 @@ pub fn advertising(): bool {
     return klin_ble_advertising() != 0
 }
 
-/// Block until a central connects or `timeout_ms` (`-1` = forever).
+/// Peripheral: wait until a central connects (`-1` = forever).
 pub fn wait_connected(timeout_ms: i32): i32 {
     return klin_ble_wait_connected(timeout_ms)
 }
@@ -95,12 +129,10 @@ pub fn stop(): i32 {
     return klin_ble_stop()
 }
 
-/// Copy `len` bytes from `data` into the characteristic value (max `gatt_value_max()`).
 pub fn gatt_set(data: *u8, len: i32): i32 {
     return klin_ble_gatt_set(data, len)
 }
 
-/// Copy current value into `out`. Returns byte count, or negative on error.
 pub fn gatt_get(out: *mut u8, max_len: i32): i32 {
     return klin_ble_gatt_get(out, max_len)
 }
@@ -109,12 +141,58 @@ pub fn gatt_len(): i32 {
     return klin_ble_gatt_len()
 }
 
-/// Notify subscribed centrals (no-op if none).
 pub fn gatt_notify(): i32 {
     return klin_ble_gatt_notify()
 }
 
-/// True if a central wrote since last poll (flag cleared).
 pub fn gatt_written(): bool {
     return klin_ble_gatt_written() != 0
+}
+
+/// Blocking active scan for `duration_ms`. Stops advertising first.
+pub fn scan_start(duration_ms: i32): i32 {
+    return klin_ble_scan_start(duration_ms)
+}
+
+pub fn scan_stop(): i32 {
+    return klin_ble_scan_stop()
+}
+
+pub fn scan_count(): i32 {
+    return klin_ble_scan_count()
+}
+
+pub fn scan_rssi(index: i32): i32 {
+    return klin_ble_scan_rssi(index)
+}
+
+pub fn scan_addr_type(index: i32): i32 {
+    return klin_ble_scan_addr_type(index)
+}
+
+/// Copy 6-byte BD_ADDR into `out6`.
+pub fn scan_addr(index: i32, out6: *mut u8): i32 {
+    return klin_ble_scan_addr(index, out6)
+}
+
+/// Copy advertised name bytes (no NUL). Returns length.
+pub fn scan_name(index: i32, out: *mut u8, max_len: i32): i32 {
+    return klin_ble_scan_name(index, out, max_len)
+}
+
+/// Connect as central to scan result `index` (GAP only; no GATT client yet).
+pub fn central_connect(index: i32, timeout_ms: i32): i32 {
+    return klin_ble_central_connect(index, timeout_ms)
+}
+
+pub fn central_connected(): bool {
+    return klin_ble_central_connected() != 0
+}
+
+pub fn central_wait_connected(timeout_ms: i32): i32 {
+    return klin_ble_central_wait_connected(timeout_ms)
+}
+
+pub fn central_disconnect(): i32 {
+    return klin_ble_central_disconnect()
 }

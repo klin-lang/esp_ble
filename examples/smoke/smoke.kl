@@ -15,31 +15,33 @@ fn main() {
   if e != ble.err_ok() {
     return
   }
-  if ble.gatt_len() != 4 {
-    return
-  }
-  let mut out: [20]u8
-  let n = ble.gatt_get(cast(*mut u8, &out[0]), ble.gatt_value_max())
-  if n != 4 {
-    return
-  }
-  e = ble.advertise("klin-ble")
+  e = ble.scan_start(500)
   if e != ble.err_ok() {
     return
   }
-  if !ble.advertising() {
+  if ble.scan_count() < 1 {
     return
   }
-  e = ble.wait_connected(1000)
+  let mut addr: [6]u8
+  e = ble.scan_addr(0, cast(*mut u8, &addr[0]))
   if e != ble.err_ok() {
     return
   }
-  if !ble.connected() {
+  let mut name: [28]u8
+  let _nl = ble.scan_name(0, cast(*mut u8, &name[0]), 28)
+  let _r = ble.scan_rssi(0)
+  e = ble.central_connect(0, 5000)
+  if e != ble.err_ok() {
     return
   }
-  let _n = ble.gatt_notify()
-  let _w = ble.gatt_written()
+  e = ble.central_wait_connected(1000)
+  if e != ble.err_ok() {
+    return
+  }
+  if !ble.central_connected() {
+    return
+  }
+  let _d = ble.central_disconnect()
   let _v = ble.version()
-  let _s = ble.gatt_svc_uuid16()
-  let _c = ble.gatt_chr_uuid16()
+  let _m = ble.scan_max()
 }
