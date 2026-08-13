@@ -1,7 +1,9 @@
-/* Thin NimBLE peripheral helpers for Klin — ESP-IDF v5.x.
+/* Thin NimBLE helpers for Klin — ESP-IDF v5.x.
  * Heap / NVS / NimBLE host task are IDF contracts, not Klin magic.
- * GATT MVP: one primary service 0xFFF0, char 0xFFF1 (read/write/notify).
- * Central role / bonding / custom UUID tables come later.
+ *
+ * Peripheral GATT MVP: svc 0xFFF0 / chr 0xFFF1 (read/write/notify).
+ * Central MVP: active scan into a fixed table; connect by index.
+ * Bonding / GATT client reads / custom UUID tables come later.
  */
 #pragma once
 
@@ -11,71 +13,74 @@
 extern "C" {
 #endif
 
-/** Max GATT characteristic value length (bytes). Caller-visible contract. */
 #define KLIN_BLE_GATT_VALUE_MAX 20
-
-/** Primary service UUID (16-bit). */
 #define KLIN_BLE_GATT_SVC_UUID16 0xFFF0
-
-/** Characteristic UUID (16-bit). */
 #define KLIN_BLE_GATT_CHR_UUID16 0xFFF1
 
-/**
- * NVS + `nimble_port_init` + GAP/GATT + host callbacks + NimBLE FreeRTOS task.
- * Registers the fixed MVP GATT service. Call once before advertise.
- * Returns `esp_err_t` as int (0 = OK).
- */
+/** Max scan results kept (deduped by address). Caller-visible contract. */
+#define KLIN_BLE_SCAN_MAX 16
+
+/** Max GAP name bytes stored per scan result (NUL-terminated in C). */
+#define KLIN_BLE_SCAN_NAME_MAX 28
+
 int klin_ble_init(void);
-
-/**
- * Set GAP device name and start undirected connectable advertising
- * (includes service UUID 0xFFF0 in adv data when possible).
- * Blocks briefly until NimBLE host is synced. `name` is a C string (copied).
- */
 int klin_ble_advertise(const char *name);
-
-/** Stop advertising (does not tear down NimBLE). */
 int klin_ble_stop_advertise(void);
-
-/** 1 while a central is connected. */
 int klin_ble_connected(void);
-
-/** 1 while advertising is active. */
 int klin_ble_advertising(void);
-
-/** Block until connected or timeout_ms (-1 = forever). 0 = OK. */
 int klin_ble_wait_connected(int timeout_ms);
-
-/** Stop NimBLE host (best-effort). */
 int klin_ble_stop(void);
 
-/**
- * Copy `len` bytes from `data` into the GATT characteristic value (max
- * KLIN_BLE_GATT_VALUE_MAX). Does not send a notification by itself.
- * Returns 0 on success.
- */
 int klin_ble_gatt_set(const uint8_t *data, int len);
-
-/**
- * Copy current value into `out` (up to `max_len`). Returns byte count, or
- * negative on error.
- */
 int klin_ble_gatt_get(uint8_t *out, int max_len);
-
-/** Current value length (0..=KLIN_BLE_GATT_VALUE_MAX). */
 int klin_ble_gatt_len(void);
-
-/**
- * Notify subscribed centrals of the current value (no-op if nobody subscribed
- * or not connected). Returns 0 on success / nothing to do.
- */
 int klin_ble_gatt_notify(void);
+int klin_ble_gatt_written(void);
 
 /**
- * 1 if a central wrote the characteristic since the last call (clears the
- * flag). Explicit poll — no Klin callbacks / hidden control flow.
+ * Stop advertising (if any), clear results, run active scan for `duration_ms`
+ * (clamped; must be > 0). Blocks until discovery completes. Returns 0 on OK.
  */
-int klin_ble_gatt_written(void);
+int klin_ble_scan_start(int duration_ms);
+
+/** Abort an in-progress scan (best-effort). */
+int klin_ble_scan_stop(void);
+
+/** Number of scan results (0..=KLIN_BLE_SCAN_MAX). */
+int klin_ble_scan_count(void);
+
+/** RSSI for result `index`, or 0 if out of range. */
+int klin_ble_scan_rssi(int index);
+
+/** Address type for result `index` (`BLE_ADDR_*`), or -1 if out of range. */
+int klin_ble_scan_addr_type(int index);
+
+/**
+ * Copy 6-byte address into `out6`. Returns 0 on OK, negative if bad index /
+ * NULL out.
+ */
+int klin_ble_scan_addr(int index, uint8_t *out6);
+
+/**
+ * Copy NUL-free name bytes into `out` (up to `max_len`). Returns length, or
+ * negative on error. Empty name → 0.
+ */
+int klin_ble_scan_name(int index, uint8_t *out, int max_len);
+
+/**
+ * Connect as central to scan result `index`. `timeout_ms` for the connection
+ * attempt (-1 = NimBLE default / long). Does not perform GATT client ops.
+ */
+int klin_ble_central_connect(int index, int timeout_ms);
+
+/** 1 while we (central) hold a connection we initiated. */
+int klin_ble_central_connected(void);
+
+/** Block until central connection or timeout. 0 = OK. */
+int klin_ble_central_wait_connected(int timeout_ms);
+
+/** Disconnect central connection (best-effort). */
+int klin_ble_central_disconnect(void);
 
 #ifdef __cplusplus
 }

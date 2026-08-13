@@ -4,6 +4,10 @@
 static uint8_t s_val[20];
 static int s_len;
 static int s_written;
+static int s_scan_n;
+static uint8_t s_addr[6] = {1, 2, 3, 4, 5, 6};
+static char s_scan_name[] = "stub";
+static int s_central;
 
 int klin_ble_init(void) { return 0; }
 int klin_ble_advertise(const char *name)
@@ -56,4 +60,65 @@ int klin_ble_gatt_written(void)
     int w = s_written;
     s_written = 0;
     return w;
+}
+
+int klin_ble_scan_start(int duration_ms)
+{
+    (void)duration_ms;
+    s_scan_n = 1;
+    return 0;
+}
+int klin_ble_scan_stop(void) { return 0; }
+int klin_ble_scan_count(void) { return s_scan_n; }
+int klin_ble_scan_rssi(int index)
+{
+    (void)index;
+    return -40;
+}
+int klin_ble_scan_addr_type(int index)
+{
+    (void)index;
+    return 0;
+}
+int klin_ble_scan_addr(int index, uint8_t *out6)
+{
+    (void)index;
+    if (out6 == NULL) {
+        return -1;
+    }
+    memcpy(out6, s_addr, 6);
+    return 0;
+}
+int klin_ble_scan_name(int index, uint8_t *out, int max_len)
+{
+    int n = (int)strlen(s_scan_name);
+    (void)index;
+    if (out == NULL || max_len < 0) {
+        return -1;
+    }
+    if (n > max_len) {
+        n = max_len;
+    }
+    if (n > 0) {
+        memcpy(out, s_scan_name, (size_t)n);
+    }
+    return n;
+}
+int klin_ble_central_connect(int index, int timeout_ms)
+{
+    (void)index;
+    (void)timeout_ms;
+    s_central = 1;
+    return 0;
+}
+int klin_ble_central_connected(void) { return s_central; }
+int klin_ble_central_wait_connected(int timeout_ms)
+{
+    (void)timeout_ms;
+    return s_central ? 0 : -1;
+}
+int klin_ble_central_disconnect(void)
+{
+    s_central = 0;
+    return 0;
 }
