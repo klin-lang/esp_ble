@@ -1,0 +1,45 @@
+// ESP32-S3 custom GATT UUID16 via klin-lang/esp_ble @v0.6.0.
+// svc 0xA001 / chr 0xA002 — must set before init.
+//   make emit && make build && make flash
+import "../../esp_ble" ble
+
+@[cexport, codename("klin_app_main")]
+fn app_main_klin() {
+  let mut e = ble.gatt_uuid16(0xA001, 0xA002)
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.init()
+  if e != ble.err_ok() {
+    return
+  }
+
+  let mut seed: [1]u8
+  seed[0] = 7
+  e = ble.gatt_set(cast(*u8, &seed[0]), 1)
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.advertise("klin-uuid")
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.wait_connected(120000)
+  if e != ble.err_ok() {
+    return
+  }
+
+  while ble.connected() {
+    let mut i: i32 = 0
+    while i < 20000000 {
+      i = i + 1
+    }
+  }
+}
+
+fn main() {
+  app_main_klin()
+}

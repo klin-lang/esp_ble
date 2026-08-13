@@ -75,11 +75,11 @@ static int s_gattc_notified;
 static int s_bond_enabled;
 static int s_bonded; /* current link encrypted+bonded after ENC_CHANGE */
 
-static const ble_uuid16_t s_svc_uuid =
-    BLE_UUID16_INIT(KLIN_BLE_GATT_SVC_UUID16);
-static const ble_uuid16_t s_chr_uuid =
-    BLE_UUID16_INIT(KLIN_BLE_GATT_CHR_UUID16);
+/* Mutable: set via gatt_uuid16() before init (server) or anytime (client). */
+static ble_uuid16_t s_svc_uuid = BLE_UUID16_INIT(KLIN_BLE_GATT_SVC_UUID16);
+static ble_uuid16_t s_chr_uuid = BLE_UUID16_INIT(KLIN_BLE_GATT_CHR_UUID16);
 static const ble_uuid16_t s_cccd_uuid = BLE_UUID16_INIT(KLIN_BLE_CCCD_UUID16);
+static int s_gatt_registered;
 
 static void klin_ble_host_task(void *param)
 {
@@ -663,6 +663,7 @@ int klin_ble_init(void)
     if (rc != 0) {
         return rc;
     }
+    s_gatt_registered = 1;
 
     /* NVS-backed key store (used when bond_enable + bond_start). */
     ble_store_config_init();
@@ -1338,4 +1339,33 @@ int klin_ble_bond_clear(void)
     rc = ble_store_clear();
     klin_ble_bond_link_reset();
     return rc;
+}
+
+/**
+ * Set 16-bit service/characteristic UUIDs used by the peripheral GATT DB and
+ * by `gattc_discover`. Must be called before `init` (after registration the
+ * server table is frozen).
+ */
+int klin_ble_gatt_uuid16(int svc_uuid16, int chr_uuid16)
+{
+    if (svc_uuid16 <= 0 || svc_uuid16 > 0xFFFF || chr_uuid16 <= 0 ||
+        chr_uuid16 > 0xFFFF) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+    if (s_gatt_registered || s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    s_svc_uuid.value = (uint16_t)svc_uuid16;
+    s_chr_uuid.value = (uint16_t)chr_uuid16;
+    return (int)ESP_OK;
+}
+
+int klin_ble_gatt_svc_uuid16(void)
+{
+    return (int)s_svc_uuid.value;
+}
+
+int klin_ble_gatt_chr_uuid16(void)
+{
+    return (int)s_chr_uuid.value;
 }

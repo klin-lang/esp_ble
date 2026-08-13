@@ -1,11 +1,12 @@
 /* Thin NimBLE helpers for Klin — ESP-IDF v5.x.
  * Heap / NVS / NimBLE host task are IDF contracts, not Klin magic.
  *
- * Peripheral GATT MVP: svc 0xFFF0 / chr 0xFFF1 (read/write/notify).
+ * Peripheral GATT MVP: default svc 0xFFF0 / chr 0xFFF1 (read/write/notify);
+ * override with gatt_uuid16() before init.
  * Central: active scan + connect; GATT client discover/read/write/subscribe
- * against the same fixed UUIDs.
+ * against the configured UUIDs.
  * Bonding: Just Works (`bond_enable` + `bond_start`); keys in IDF NVS.
- * Custom UUID tables / passkey IO / mesh come later.
+ * 128-bit UUID tables / passkey IO / mesh come later.
  */
 #pragma once
 
@@ -26,6 +27,15 @@ extern "C" {
 #define KLIN_BLE_SCAN_NAME_MAX 28
 
 int klin_ble_init(void);
+/**
+ * Set 16-bit svc/chr UUIDs (default 0xFFF0 / 0xFFF1). Call **before** `init`.
+ * Affects peripheral GATT registration, advertising UUID, and `gattc_discover`.
+ */
+int klin_ble_gatt_uuid16(int svc_uuid16, int chr_uuid16);
+/** Current service UUID16 (default or last `gatt_uuid16`). */
+int klin_ble_gatt_svc_uuid16(void);
+/** Current characteristic UUID16. */
+int klin_ble_gatt_chr_uuid16(void);
 int klin_ble_advertise(const char *name);
 int klin_ble_stop_advertise(void);
 int klin_ble_connected(void);
