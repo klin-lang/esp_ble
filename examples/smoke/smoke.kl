@@ -41,6 +41,25 @@ fn main() {
   if !ble.central_connected() {
     return
   }
+  e = ble.gattc_discover(1000)
+  if e != ble.err_ok() {
+    return
+  }
+  if !ble.gattc_ready() {
+    return
+  }
+  let _s = ble.gattc_subscribe(1000)
+  e = ble.gattc_write(cast(*u8, &v[0]), 4, 1000)
+  if e != ble.err_ok() {
+    return
+  }
+  e = ble.gattc_read(1000)
+  if e != ble.err_ok() {
+    return
+  }
+  let mut gbuf: [20]u8
+  let _gl = ble.gattc_get(cast(*mut u8, &gbuf[0]), ble.gatt_value_max())
+  let _gn = ble.gattc_notified()
   let _d = ble.central_disconnect()
   let _v = ble.version()
   let _m = ble.scan_max()

@@ -1,6 +1,6 @@
-/* NimBLE peripheral GATT + central scan/connect for Klin (ESP-IDF v5.x).
- * Requires: CONFIG_BT_ENABLED + CONFIG_BT_NIMBLE_ENABLED
- * (+ central/observer roles for scan/connect).
+/* NimBLE peripheral GATT + central scan/connect + GATT client for Klin
+ * (ESP-IDF v5.x). Requires: CONFIG_BT_ENABLED + CONFIG_BT_NIMBLE_ENABLED
+ * (+ central/observer roles for scan/connect/client).
  */
 #include "nimble_idf.h"
 
@@ -23,7 +23,10 @@
 #define KLIN_BLE_CONNECTED_BIT      BIT1
 #define KLIN_BLE_SCAN_DONE_BIT      BIT2
 #define KLIN_BLE_CENTRAL_CONN_BIT   BIT3
+#define KLIN_BLE_GATTC_DISC_BIT     BIT4
+#define KLIN_BLE_GATTC_OP_BIT       BIT5
 #define KLIN_BLE_NAME_MAX           28
+#define KLIN_BLE_CCCD_UUID16        0x2902
 
 typedef struct {
     ble_addr_t addr;
@@ -53,10 +56,22 @@ static int s_gatt_notify_enabled;
 static klin_ble_scan_row_t s_scan[KLIN_BLE_SCAN_MAX];
 static int s_scan_count;
 
+/* GATT client (central) — discovers fixed 0xFFF0 / 0xFFF1 on the peer. */
+static uint16_t s_gattc_svc_start;
+static uint16_t s_gattc_svc_end;
+static uint16_t s_gattc_val_handle;
+static uint16_t s_gattc_cccd_handle;
+static int s_gattc_ready;
+static int s_gattc_op_rc;
+static uint8_t s_gattc_buf[KLIN_BLE_GATT_VALUE_MAX];
+static uint16_t s_gattc_buf_len;
+static int s_gattc_notified;
+
 static const ble_uuid16_t s_svc_uuid =
     BLE_UUID16_INIT(KLIN_BLE_GATT_SVC_UUID16);
 static const ble_uuid16_t s_chr_uuid =
     BLE_UUID16_INIT(KLIN_BLE_GATT_CHR_UUID16);
+static const ble_uuid16_t s_cccd_uuid = BLE_UUID16_INIT(KLIN_BLE_CCCD_UUID16);
 
 static void klin_ble_host_task(void *param)
 {
@@ -68,6 +83,196 @@ static void klin_ble_host_task(void *param)
 static void klin_ble_on_reset(int reason)
 {
     printf("klin_ble: reset reason=%d\n", reason);
+}
+
+static int klin_ble_gap_event(struct ble_gap_event *event, void *arg);
+
+static void klin_ble_gattc_reset(void)
+{
+    s_gattc_svc_start = 0;
+    s_gattc_svc_end = 0;
+    s_gattc_val_handle = 0;
+    s_gattc_cccd_handle = 0;
+    s_gattc_ready = 0;
+    s_gattc_op_rc = 0;
+    s_gattc_buf_len = 0;
+    s_gattc_notified = 0;
+    memset(s_gattc_buf, 0, sizeof(s_gattc_buf));
+}
+
+static int klin_ble_gattc_wait_bit(EventBits_t bit, int timeout_ms)
+{
+    TickType_t ticks;
+    EventBits_t bits;
+
+    if (timeout_ms < 0) {
+        ticks = portMAX_DELAY;
+    } else {
+        ticks = pdMS_TO_TICKS((uint32_t)timeout_ms);
+    }
+    bits = xEventGroupWaitBits(s_ble_events, bit, pdTRUE, pdFALSE, ticks);
+    if (bits & bit) {
+        return (int)ESP_OK;
+    }
+    return (int)ESP_ERR_TIMEOUT;
+}
+
+static int klin_ble_gattc_on_dsc(uint16_t conn_handle,
+                                 const struct ble_gatt_error *error,
+                                 uint16_t chr_val_handle,
+                                 const struct ble_gatt_dsc *dsc, void *arg)
+{
+    (void)conn_handle;
+    (void)chr_val_handle;
+    (void)arg;
+
+    if (error->status == 0 && dsc != NULL) {
+        if (ble_uuid_cmp(&dsc->uuid.u, &s_cccd_uuid.u) == 0) {
+            s_gattc_cccd_handle = dsc->handle;
+        }
+        return 0;
+    }
+    if (error->status == BLE_HS_EDONE) {
+        s_gattc_ready = (s_gattc_val_handle != 0) ? 1 : 0;
+        s_gattc_op_rc = s_gattc_ready ? 0 : BLE_HS_ENOENT;
+        if (s_ble_events != NULL) {
+            xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_DISC_BIT);
+        }
+        return 0;
+    }
+    s_gattc_op_rc = error->status;
+    if (s_ble_events != NULL) {
+        xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_DISC_BIT);
+    }
+    return 0;
+}
+
+static int klin_ble_gattc_on_chr(uint16_t conn_handle,
+                                 const struct ble_gatt_error *error,
+                                 const struct ble_gatt_chr *chr, void *arg)
+{
+    int rc;
+
+    (void)arg;
+    if (error->status == 0 && chr != NULL) {
+        if (ble_uuid_cmp(&chr->uuid.u, &s_chr_uuid.u) == 0) {
+            s_gattc_val_handle = chr->val_handle;
+        }
+        return 0;
+    }
+    if (error->status == BLE_HS_EDONE) {
+        if (s_gattc_val_handle == 0 || s_gattc_svc_end == 0) {
+            s_gattc_op_rc = BLE_HS_ENOENT;
+            if (s_ble_events != NULL) {
+                xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_DISC_BIT);
+            }
+            return 0;
+        }
+        /* Descriptors after the value handle up to service end. */
+        rc = ble_gattc_disc_all_dscs(conn_handle, s_gattc_val_handle,
+                                     s_gattc_svc_end, klin_ble_gattc_on_dsc,
+                                     NULL);
+        if (rc != 0) {
+            /* Char found; CCCD optional for read/write-only peers. */
+            s_gattc_ready = 1;
+            s_gattc_op_rc = 0;
+            if (s_ble_events != NULL) {
+                xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_DISC_BIT);
+            }
+        }
+        return 0;
+    }
+    s_gattc_op_rc = error->status;
+    if (s_ble_events != NULL) {
+        xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_DISC_BIT);
+    }
+    return 0;
+}
+
+static int klin_ble_gattc_on_svc(uint16_t conn_handle,
+                                 const struct ble_gatt_error *error,
+                                 const struct ble_gatt_svc *service, void *arg)
+{
+    int rc;
+
+    (void)arg;
+    if (error->status == 0 && service != NULL) {
+        s_gattc_svc_start = service->start_handle;
+        s_gattc_svc_end = service->end_handle;
+        return 0;
+    }
+    if (error->status == BLE_HS_EDONE) {
+        if (s_gattc_svc_start == 0) {
+            s_gattc_op_rc = BLE_HS_ENOENT;
+            if (s_ble_events != NULL) {
+                xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_DISC_BIT);
+            }
+            return 0;
+        }
+        rc = ble_gattc_disc_chrs_by_uuid(conn_handle, s_gattc_svc_start,
+                                         s_gattc_svc_end, &s_chr_uuid.u,
+                                         klin_ble_gattc_on_chr, NULL);
+        if (rc != 0) {
+            s_gattc_op_rc = rc;
+            if (s_ble_events != NULL) {
+                xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_DISC_BIT);
+            }
+        }
+        return 0;
+    }
+    s_gattc_op_rc = error->status;
+    if (s_ble_events != NULL) {
+        xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_DISC_BIT);
+    }
+    return 0;
+}
+
+static int klin_ble_gattc_on_read(uint16_t conn_handle,
+                                  const struct ble_gatt_error *error,
+                                  struct ble_gatt_attr *attr, void *arg)
+{
+    uint16_t om_len;
+    int rc;
+
+    (void)conn_handle;
+    (void)arg;
+    if (error->status != 0) {
+        s_gattc_op_rc = error->status;
+        if (s_ble_events != NULL) {
+            xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_OP_BIT);
+        }
+        return 0;
+    }
+    om_len = OS_MBUF_PKTLEN(attr->om);
+    if (om_len > KLIN_BLE_GATT_VALUE_MAX) {
+        om_len = KLIN_BLE_GATT_VALUE_MAX;
+    }
+    rc = ble_hs_mbuf_to_flat(attr->om, s_gattc_buf, om_len, NULL);
+    if (rc != 0) {
+        s_gattc_op_rc = rc;
+        s_gattc_buf_len = 0;
+    } else {
+        s_gattc_buf_len = om_len;
+        s_gattc_op_rc = 0;
+    }
+    if (s_ble_events != NULL) {
+        xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_OP_BIT);
+    }
+    return 0;
+}
+
+static int klin_ble_gattc_on_write(uint16_t conn_handle,
+                                   const struct ble_gatt_error *error,
+                                   struct ble_gatt_attr *attr, void *arg)
+{
+    (void)conn_handle;
+    (void)attr;
+    (void)arg;
+    s_gattc_op_rc = error->status;
+    if (s_ble_events != NULL) {
+        xEventGroupSetBits(s_ble_events, KLIN_BLE_GATTC_OP_BIT);
+    }
+    return 0;
 }
 
 static int klin_ble_gap_event(struct ble_gap_event *event, void *arg);
@@ -281,6 +486,7 @@ static int klin_ble_gap_event(struct ble_gap_event *event, void *arg)
             event->disconnect.conn.conn_handle == s_central_conn_handle) {
             s_central_connected = 0;
             s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+            klin_ble_gattc_reset();
             if (s_ble_events != NULL) {
                 xEventGroupClearBits(s_ble_events, KLIN_BLE_CENTRAL_CONN_BIT);
             }
@@ -296,6 +502,24 @@ static int klin_ble_gap_event(struct ble_gap_event *event, void *arg)
             }
         }
         return 0;
+
+    case BLE_GAP_EVENT_NOTIFY_RX: {
+        uint16_t n;
+
+        if (event->notify_rx.attr_handle == s_gattc_val_handle &&
+            event->notify_rx.om != NULL) {
+            n = OS_MBUF_PKTLEN(event->notify_rx.om);
+            if (n > KLIN_BLE_GATT_VALUE_MAX) {
+                n = KLIN_BLE_GATT_VALUE_MAX;
+            }
+            if (ble_hs_mbuf_to_flat(event->notify_rx.om, s_gattc_buf, n,
+                                   NULL) == 0) {
+                s_gattc_buf_len = n;
+                s_gattc_notified = 1;
+            }
+        }
+        return 0;
+    }
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
         s_advertising = 0;
@@ -754,6 +978,7 @@ int klin_ble_central_connect(int index, int timeout_ms)
                                 BLE_ERR_REM_USER_CONN_TERM);
         s_central_connected = 0;
         s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        klin_ble_gattc_reset();
     }
 
     xEventGroupClearBits(s_ble_events, KLIN_BLE_CENTRAL_CONN_BIT);
@@ -810,4 +1035,156 @@ int klin_ble_central_disconnect(void)
     }
     rc = ble_gap_terminate(s_central_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
     return rc;
+}
+
+int klin_ble_gattc_discover(int timeout_ms)
+{
+    int rc;
+
+    if (!s_inited || !s_central_connected ||
+        s_central_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+
+    klin_ble_gattc_reset();
+    if (s_ble_events != NULL) {
+        xEventGroupClearBits(s_ble_events, KLIN_BLE_GATTC_DISC_BIT);
+    }
+
+    rc = ble_gattc_disc_svc_by_uuid(s_central_conn_handle, &s_svc_uuid.u,
+                                    klin_ble_gattc_on_svc, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = klin_ble_gattc_wait_bit(KLIN_BLE_GATTC_DISC_BIT, timeout_ms);
+    if (rc != 0) {
+        return rc;
+    }
+    if (s_gattc_ready && s_gattc_op_rc == 0) {
+        return (int)ESP_OK;
+    }
+    return s_gattc_op_rc != 0 ? s_gattc_op_rc : BLE_HS_ENOENT;
+}
+
+int klin_ble_gattc_ready(void)
+{
+    return (s_gattc_ready && s_central_connected) ? 1 : 0;
+}
+
+int klin_ble_gattc_read(int timeout_ms)
+{
+    int rc;
+
+    if (!s_inited || !s_gattc_ready || !s_central_connected ||
+        s_gattc_val_handle == 0) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_ble_events != NULL) {
+        xEventGroupClearBits(s_ble_events, KLIN_BLE_GATTC_OP_BIT);
+    }
+    s_gattc_op_rc = 0;
+    s_gattc_buf_len = 0;
+
+    rc = ble_gattc_read(s_central_conn_handle, s_gattc_val_handle,
+                        klin_ble_gattc_on_read, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = klin_ble_gattc_wait_bit(KLIN_BLE_GATTC_OP_BIT, timeout_ms);
+    if (rc != 0) {
+        return rc;
+    }
+    return s_gattc_op_rc;
+}
+
+int klin_ble_gattc_write(const uint8_t *data, int len, int timeout_ms)
+{
+    int rc;
+
+    if (!s_inited || !s_gattc_ready || !s_central_connected ||
+        s_gattc_val_handle == 0) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (data == NULL || len < 0 || len > KLIN_BLE_GATT_VALUE_MAX) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_ble_events != NULL) {
+        xEventGroupClearBits(s_ble_events, KLIN_BLE_GATTC_OP_BIT);
+    }
+    s_gattc_op_rc = 0;
+
+    rc = ble_gattc_write_flat(s_central_conn_handle, s_gattc_val_handle, data,
+                              (uint16_t)len, klin_ble_gattc_on_write, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = klin_ble_gattc_wait_bit(KLIN_BLE_GATTC_OP_BIT, timeout_ms);
+    if (rc != 0) {
+        return rc;
+    }
+    return s_gattc_op_rc;
+}
+
+int klin_ble_gattc_subscribe(int timeout_ms)
+{
+    uint8_t cccd[2] = {0x01, 0x00};
+    int rc;
+
+    if (!s_inited || !s_gattc_ready || !s_central_connected) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (s_gattc_cccd_handle == 0) {
+        return BLE_HS_ENOENT;
+    }
+
+    if (s_ble_events != NULL) {
+        xEventGroupClearBits(s_ble_events, KLIN_BLE_GATTC_OP_BIT);
+    }
+    s_gattc_op_rc = 0;
+
+    rc = ble_gattc_write_flat(s_central_conn_handle, s_gattc_cccd_handle, cccd,
+                              2, klin_ble_gattc_on_write, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = klin_ble_gattc_wait_bit(KLIN_BLE_GATTC_OP_BIT, timeout_ms);
+    if (rc != 0) {
+        return rc;
+    }
+    return s_gattc_op_rc;
+}
+
+int klin_ble_gattc_notified(void)
+{
+    int n = s_gattc_notified;
+    s_gattc_notified = 0;
+    return n;
+}
+
+int klin_ble_gattc_get(uint8_t *out, int max_len)
+{
+    int n;
+
+    if (out == NULL || max_len < 0) {
+        return -1;
+    }
+    n = (int)s_gattc_buf_len;
+    if (n > max_len) {
+        n = max_len;
+    }
+    if (n > 0) {
+        memcpy(out, s_gattc_buf, (size_t)n);
+    }
+    return n;
+}
+
+int klin_ble_gattc_len(void)
+{
+    return (int)s_gattc_buf_len;
 }

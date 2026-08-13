@@ -2,8 +2,9 @@
 /// Radio silicon + IDF NimBLE host task; Klin does not hide those costs.
 /// Not part of `machine_esp`. Sibling of `esp_wifi` / `esp_eth`.
 ///
-/// `@v0.2.0` GATT: svc `0xFFF0` / chr `0xFFF1` (R/W/Notify), max 20 bytes.
+/// `@v0.2.0` GATT server: svc `0xFFF0` / chr `0xFFF1` (R/W/Notify), max 20 bytes.
 /// `@v0.3.0` central: active scan (max 16 results) + connect by index.
+/// `@v0.4.0` GATT client: discover / read / write / subscribe on the same UUIDs.
 module esp_ble
 
 @[link("nimble_idf.c")]
@@ -76,6 +77,30 @@ fn klin_ble_central_wait_connected(timeout_ms: i32): i32
 
 @[cimport, codename("klin_ble_central_disconnect")]
 fn klin_ble_central_disconnect(): i32
+
+@[cimport, codename("klin_ble_gattc_discover")]
+fn klin_ble_gattc_discover(timeout_ms: i32): i32
+
+@[cimport, codename("klin_ble_gattc_ready")]
+fn klin_ble_gattc_ready(): i32
+
+@[cimport, codename("klin_ble_gattc_read")]
+fn klin_ble_gattc_read(timeout_ms: i32): i32
+
+@[cimport, codename("klin_ble_gattc_write")]
+fn klin_ble_gattc_write(data: *u8, len: i32, timeout_ms: i32): i32
+
+@[cimport, codename("klin_ble_gattc_subscribe")]
+fn klin_ble_gattc_subscribe(timeout_ms: i32): i32
+
+@[cimport, codename("klin_ble_gattc_notified")]
+fn klin_ble_gattc_notified(): i32
+
+@[cimport, codename("klin_ble_gattc_get")]
+fn klin_ble_gattc_get(out: *mut u8, max_len: i32): i32
+
+@[cimport, codename("klin_ble_gattc_len")]
+fn klin_ble_gattc_len(): i32
 
 /// `ESP_OK` / NimBLE success (0).
 pub fn err_ok(): i32 {
@@ -180,7 +205,7 @@ pub fn scan_name(index: i32, out: *mut u8, max_len: i32): i32 {
     return klin_ble_scan_name(index, out, max_len)
 }
 
-/// Connect as central to scan result `index` (GAP only; no GATT client yet).
+/// Connect as central to scan result `index` (GAP). Then `gattc_discover`.
 pub fn central_connect(index: i32, timeout_ms: i32): i32 {
     return klin_ble_central_connect(index, timeout_ms)
 }
@@ -195,4 +220,39 @@ pub fn central_wait_connected(timeout_ms: i32): i32 {
 
 pub fn central_disconnect(): i32 {
     return klin_ble_central_disconnect()
+}
+
+/// Discover peer svc `0xFFF0` / chr `0xFFF1` (blocking).
+pub fn gattc_discover(timeout_ms: i32): i32 {
+    return klin_ble_gattc_discover(timeout_ms)
+}
+
+pub fn gattc_ready(): bool {
+    return klin_ble_gattc_ready() != 0
+}
+
+pub fn gattc_read(timeout_ms: i32): i32 {
+    return klin_ble_gattc_read(timeout_ms)
+}
+
+pub fn gattc_write(data: *u8, len: i32, timeout_ms: i32): i32 {
+    return klin_ble_gattc_write(data, len, timeout_ms)
+}
+
+/// Enable notifications (CCCD). Peer must expose CCCD.
+pub fn gattc_subscribe(timeout_ms: i32): i32 {
+    return klin_ble_gattc_subscribe(timeout_ms)
+}
+
+/// Clears on read; payload via `gattc_get` / `gattc_len`.
+pub fn gattc_notified(): bool {
+    return klin_ble_gattc_notified() != 0
+}
+
+pub fn gattc_get(out: *mut u8, max_len: i32): i32 {
+    return klin_ble_gattc_get(out, max_len)
+}
+
+pub fn gattc_len(): i32 {
+    return klin_ble_gattc_len()
 }

@@ -122,3 +122,33 @@ int klin_ble_central_disconnect(void)
     s_central = 0;
     return 0;
 }
+
+int klin_ble_gattc_discover(int timeout_ms)
+{
+    (void)timeout_ms;
+    return s_central ? 0 : -1;
+}
+int klin_ble_gattc_ready(void) { return s_central; }
+int klin_ble_gattc_read(int timeout_ms)
+{
+    (void)timeout_ms;
+    s_len = 1;
+    s_val[0] = 7;
+    return 0;
+}
+int klin_ble_gattc_write(const uint8_t *data, int len, int timeout_ms)
+{
+    (void)timeout_ms;
+    return klin_ble_gatt_set(data, len);
+}
+int klin_ble_gattc_subscribe(int timeout_ms)
+{
+    (void)timeout_ms;
+    return 0;
+}
+int klin_ble_gattc_notified(void) { return 0; }
+int klin_ble_gattc_get(uint8_t *out, int max_len)
+{
+    return klin_ble_gatt_get(out, max_len);
+}
+int klin_ble_gattc_len(void) { return s_len; }
