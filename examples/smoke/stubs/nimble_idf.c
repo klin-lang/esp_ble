@@ -178,11 +178,32 @@ int klin_ble_gattc_len(void) { return s_len; }
 
 static int s_bond_on;
 static int s_bond_ok;
+static int s_pin_mode;
+static int s_pin;
 
 int klin_ble_bond_enable(void)
 {
     s_bond_on = 1;
+    s_pin_mode = 0;
+    s_pin = 0;
     return 0;
+}
+int klin_ble_bond_passkey(int passkey)
+{
+    if (passkey < 0 || passkey > 999999) {
+        return -1;
+    }
+    s_bond_on = 1;
+    s_pin_mode = 1;
+    s_pin = passkey;
+    return 0;
+}
+int klin_ble_passkey(void) { return s_pin_mode ? s_pin : 0; }
+int klin_ble_passkey_action(void) { return 0; }
+int klin_ble_passkey_inject(int passkey)
+{
+    (void)passkey;
+    return s_pin_mode ? 0 : -1;
 }
 int klin_ble_bond_start(void)
 {

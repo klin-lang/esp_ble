@@ -75,8 +75,11 @@ fn main() {
   let mut gbuf: [20]u8
   let _gl = ble.gattc_get(cast(*mut u8, &gbuf[0]), ble.gatt_value_max())
   let _gn = ble.gattc_notified()
-  e = ble.bond_enable()
+  e = ble.bond_passkey(123456)
   if e != ble.err_ok() {
+    return
+  }
+  if ble.passkey() != 123456 {
     return
   }
   e = ble.bond_start()
@@ -90,6 +93,8 @@ fn main() {
   if !ble.bonded() {
     return
   }
+  let _pa = ble.passkey_action()
+  let _pi = ble.passkey_inject(123456)
   let _bc = ble.bond_count()
   let _bcl = ble.bond_clear()
   let _d = ble.central_disconnect()
