@@ -1,0 +1,24 @@
+// emit-c smoke (no ESP-IDF).
+import "../../esp_ble" ble
+
+fn main() {
+  let mut e = ble.init()
+  if e != ble.err_ok() {
+    return
+  }
+  e = ble.advertise("klin-ble")
+  if e != ble.err_ok() {
+    return
+  }
+  if !ble.advertising() {
+    return
+  }
+  e = ble.wait_connected(1000)
+  if e != ble.err_ok() {
+    return
+  }
+  if !ble.connected() {
+    return
+  }
+  let _v = ble.version()
+}

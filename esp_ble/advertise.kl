@@ -1,0 +1,63 @@
+/// ESP-IDF NimBLE peripheral — thin Klin surface over `nimble_idf.c`.
+/// Radio silicon + IDF NimBLE host task; Klin does not hide those costs.
+/// Not part of `machine_esp`. Sibling of `esp_wifi` / `esp_eth`.
+module esp_ble
+
+@[link("nimble_idf.c")]
+@[cinclude("nimble_idf.h")]
+@[cimport, codename("klin_ble_init")]
+fn klin_ble_init(): i32
+
+@[cimport, codename("klin_ble_advertise")]
+fn klin_ble_advertise(name: str): i32
+
+@[cimport, codename("klin_ble_stop_advertise")]
+fn klin_ble_stop_advertise(): i32
+
+@[cimport, codename("klin_ble_connected")]
+fn klin_ble_connected(): i32
+
+@[cimport, codename("klin_ble_advertising")]
+fn klin_ble_advertising(): i32
+
+@[cimport, codename("klin_ble_wait_connected")]
+fn klin_ble_wait_connected(timeout_ms: i32): i32
+
+@[cimport, codename("klin_ble_stop")]
+fn klin_ble_stop(): i32
+
+/// `ESP_OK` / NimBLE success (0).
+pub fn err_ok(): i32 {
+    return 0
+}
+
+/// NVS + NimBLE port + host task. Returns `esp_err_t` as `i32` (0 = OK).
+pub fn init(): i32 {
+    return klin_ble_init()
+}
+
+/// Undirected connectable advertise with GAP name (copied in C).
+pub fn advertise(name: str): i32 {
+    return klin_ble_advertise(name)
+}
+
+pub fn stop_advertise(): i32 {
+    return klin_ble_stop_advertise()
+}
+
+pub fn connected(): bool {
+    return klin_ble_connected() != 0
+}
+
+pub fn advertising(): bool {
+    return klin_ble_advertising() != 0
+}
+
+/// Block until a central connects or `timeout_ms` (`-1` = forever).
+pub fn wait_connected(timeout_ms: i32): i32 {
+    return klin_ble_wait_connected(timeout_ms)
+}
+
+pub fn stop(): i32 {
+    return klin_ble_stop()
+}
