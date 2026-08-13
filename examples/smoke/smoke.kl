@@ -6,6 +6,23 @@ fn main() {
   if e != ble.err_ok() {
     return
   }
+  let mut v: [4]u8
+  v[0] = 1
+  v[1] = 2
+  v[2] = 3
+  v[3] = 4
+  e = ble.gatt_set(cast(*u8, &v[0]), 4)
+  if e != ble.err_ok() {
+    return
+  }
+  if ble.gatt_len() != 4 {
+    return
+  }
+  let mut out: [20]u8
+  let n = ble.gatt_get(cast(*mut u8, &out[0]), ble.gatt_value_max())
+  if n != 4 {
+    return
+  }
   e = ble.advertise("klin-ble")
   if e != ble.err_ok() {
     return
@@ -20,5 +37,9 @@ fn main() {
   if !ble.connected() {
     return
   }
+  let _n = ble.gatt_notify()
+  let _w = ble.gatt_written()
   let _v = ble.version()
+  let _s = ble.gatt_svc_uuid16()
+  let _c = ble.gatt_chr_uuid16()
 }
