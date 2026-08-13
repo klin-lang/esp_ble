@@ -1,0 +1,54 @@
+// ESP32-S3 NimBLE GATT peripheral via klin-lang/esp_ble @v0.2.0.
+// Service 0xFFF0 / char 0xFFF1 — read, write, notify.
+//   make emit && make build && make flash
+// Then nRF Connect: enable notify, write bytes, read back.
+import "../../esp_ble" ble
+
+@[cexport, codename("klin_app_main")]
+fn app_main_klin() {
+  let mut e = ble.init()
+  if e != ble.err_ok() {
+    return
+  }
+
+  let mut seed: [1]u8
+  seed[0] = 42
+  e = ble.gatt_set(cast(*u8, &seed[0]), 1)
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.advertise("klin-gatt")
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.wait_connected(120000)
+  if e != ble.err_ok() {
+    return
+  }
+
+  let mut counter: u8 = 42
+  while true {
+    if ble.gatt_written() {
+      let mut buf: [20]u8
+      let n = ble.gatt_get(cast(*mut u8, &buf[0]), ble.gatt_value_max())
+      if n > 0 {
+        counter = buf[0]
+      }
+    }
+    counter = counter + 1
+    let mut out: [1]u8
+    out[0] = counter
+    let _s = ble.gatt_set(cast(*u8, &out[0]), 1)
+    let _n = ble.gatt_notify()
+    let mut i: i32 = 0
+    while i < 8000000 {
+      i = i + 1
+    }
+  }
+}
+
+fn main() {
+  app_main_klin()
+}

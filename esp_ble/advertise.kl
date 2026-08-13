@@ -1,6 +1,9 @@
 /// ESP-IDF NimBLE peripheral — thin Klin surface over `nimble_idf.c`.
 /// Radio silicon + IDF NimBLE host task; Klin does not hide those costs.
 /// Not part of `machine_esp`. Sibling of `esp_wifi` / `esp_eth`.
+///
+/// GATT MVP (`@v0.2.0`): fixed service `0xFFF0`, char `0xFFF1`
+/// (read / write / notify), value buffer max 20 bytes.
 module esp_ble
 
 @[link("nimble_idf.c")]
@@ -26,12 +29,42 @@ fn klin_ble_wait_connected(timeout_ms: i32): i32
 @[cimport, codename("klin_ble_stop")]
 fn klin_ble_stop(): i32
 
+@[cimport, codename("klin_ble_gatt_set")]
+fn klin_ble_gatt_set(data: *u8, len: i32): i32
+
+@[cimport, codename("klin_ble_gatt_get")]
+fn klin_ble_gatt_get(out: *mut u8, max_len: i32): i32
+
+@[cimport, codename("klin_ble_gatt_len")]
+fn klin_ble_gatt_len(): i32
+
+@[cimport, codename("klin_ble_gatt_notify")]
+fn klin_ble_gatt_notify(): i32
+
+@[cimport, codename("klin_ble_gatt_written")]
+fn klin_ble_gatt_written(): i32
+
 /// `ESP_OK` / NimBLE success (0).
 pub fn err_ok(): i32 {
     return 0
 }
 
-/// NVS + NimBLE port + host task. Returns `esp_err_t` as `i32` (0 = OK).
+/// Primary service UUID (16-bit) — fixed for MVP.
+pub fn gatt_svc_uuid16(): i32 {
+    return 0xFFF0
+}
+
+/// Characteristic UUID (16-bit) — fixed for MVP.
+pub fn gatt_chr_uuid16(): i32 {
+    return 0xFFF1
+}
+
+/// Max GATT value length (bytes).
+pub fn gatt_value_max(): i32 {
+    return 20
+}
+
+/// NVS + NimBLE port + GAP/GATT registration + host task. Returns `esp_err_t` as `i32` (0 = OK).
 pub fn init(): i32 {
     return klin_ble_init()
 }
@@ -60,4 +93,28 @@ pub fn wait_connected(timeout_ms: i32): i32 {
 
 pub fn stop(): i32 {
     return klin_ble_stop()
+}
+
+/// Copy `len` bytes from `data` into the characteristic value (max `gatt_value_max()`).
+pub fn gatt_set(data: *u8, len: i32): i32 {
+    return klin_ble_gatt_set(data, len)
+}
+
+/// Copy current value into `out`. Returns byte count, or negative on error.
+pub fn gatt_get(out: *mut u8, max_len: i32): i32 {
+    return klin_ble_gatt_get(out, max_len)
+}
+
+pub fn gatt_len(): i32 {
+    return klin_ble_gatt_len()
+}
+
+/// Notify subscribed centrals (no-op if none).
+pub fn gatt_notify(): i32 {
+    return klin_ble_gatt_notify()
+}
+
+/// True if a central wrote since last poll (flag cleared).
+pub fn gatt_written(): bool {
+    return klin_ble_gatt_written() != 0
 }

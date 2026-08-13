@@ -10,3 +10,4 @@ dependencies.lock
 *.bin
 *.map
 .DS_Store
+out/
