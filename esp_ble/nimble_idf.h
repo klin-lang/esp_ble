@@ -5,8 +5,8 @@
  * override with gatt_uuid16() before init.
  * Central: active scan + connect; GATT client discover/read/write/subscribe
  * against the configured UUIDs.
- * Bonding: Just Works (`bond_enable` + `bond_start`); keys in IDF NVS.
- * 128-bit UUID tables / passkey IO / mesh come later.
+ * Bonding: Just Works (`bond_enable`) or fixed passkey (`bond_passkey`).
+ * 128-bit UUID tables / mesh come later.
  */
 #pragma once
 
@@ -134,8 +134,25 @@ int klin_ble_gattc_len(void);
 int klin_ble_bond_enable(void);
 
 /**
+ * Enable bonding with a fixed 6-digit passkey/PIN (`0..=999999`). MITM.
+ * On PASSKEY_ACTION the PIN is injected automatically. Replaces Just Works
+ * config from `bond_enable`.
+ */
+int klin_ble_bond_passkey(int passkey);
+
+/** Configured passkey, or 0 if Just Works / unset. */
+int klin_ble_passkey(void);
+
+/** Last `BLE_SM_IOACT_*` from PASSKEY_ACTION (0 if none). */
+int klin_ble_passkey_action(void);
+
+/** Manual inject for INPUT/DISP (usually not needed with `bond_passkey`). */
+int klin_ble_passkey_inject(int passkey);
+
+/**
  * Start pairing/encryption on the active connection (central preferred,
- * else peripheral). Requires `bond_enable`. Completes via ENC_CHANGE.
+ * else peripheral). Requires `bond_enable` or `bond_passkey`. Completes via
+ * ENC_CHANGE.
  */
 int klin_ble_bond_start(void);
 

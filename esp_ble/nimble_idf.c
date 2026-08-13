@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "host/ble_hs.h"
+#include "host/ble_sm.h"
 #include "host/ble_store.h"
 #include "host/ble_uuid.h"
 #include "host/util/util.h"
@@ -71,9 +72,14 @@ static uint8_t s_gattc_buf[KLIN_BLE_GATT_VALUE_MAX];
 static uint16_t s_gattc_buf_len;
 static int s_gattc_notified;
 
-/* Bonding / pairing (Just Works). Keys live in IDF NVS via ble_store. */
+/* Bonding / pairing. Keys live in IDF NVS via ble_store.
+ * Just Works: bond_enable. Passkey/PIN: bond_passkey(pin).
+ */
 static int s_bond_enabled;
 static int s_bonded; /* current link encrypted+bonded after ENC_CHANGE */
+static int s_passkey_mode;
+static uint32_t s_passkey;
+static int s_passkey_action; /* last BLE_SM_IOACT_* seen */
 
 /* Mutable: set via gatt_uuid16() before init (server) or anytime (client). */
 static ble_uuid16_t s_svc_uuid = BLE_UUID16_INIT(KLIN_BLE_GATT_SVC_UUID16);
@@ -544,6 +550,29 @@ static int klin_ble_gap_event(struct ble_gap_event *event, void *arg)
         }
         return 0;
 
+    case BLE_GAP_EVENT_PASSKEY_ACTION: {
+        struct ble_sm_io pkey;
+
+        s_passkey_action = (int)event->passkey.params.action;
+        if (!s_passkey_mode) {
+            return 0;
+        }
+
+        memset(&pkey, 0, sizeof(pkey));
+        pkey.action = event->passkey.params.action;
+        if (pkey.action == BLE_SM_IOACT_DISP ||
+            pkey.action == BLE_SM_IOACT_INPUT) {
+            /* Fixed application PIN (000000..999999). */
+            pkey.passkey = s_passkey;
+            (void)ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+        } else if (pkey.action == BLE_SM_IOACT_NUMCMP) {
+            /* Stack-generated number; accept to complete pairing. */
+            pkey.numcmp_accept = 1;
+            (void)ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+        }
+        return 0;
+    }
+
     case BLE_GAP_EVENT_REPEAT_PAIRING:
         /* Replace old bond (explicit convenience policy for this MVP). */
         rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
@@ -677,6 +706,9 @@ int klin_ble_init(void)
     s_scan_count = 0;
     s_bond_enabled = 0;
     s_bonded = 0;
+    s_passkey_mode = 0;
+    s_passkey = 0;
+    s_passkey_action = 0;
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_gatt_len = 0;
@@ -1261,8 +1293,82 @@ int klin_ble_bond_enable(void)
         BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist =
         BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    s_passkey_mode = 0;
+    s_passkey = 0;
+    s_passkey_action = 0;
     s_bond_enabled = 1;
     return (int)ESP_OK;
+}
+
+/**
+ * Enable bonding with a fixed 6-digit passkey/PIN (0..999999). MITM + keyboard
+ * /display IO. On PASSKEY_ACTION the PIN is injected automatically.
+ */
+int klin_ble_bond_passkey(int passkey)
+{
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (passkey < 0 || passkey > 999999) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_KEYBOARD_DISP;
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_mitm = 1;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_our_key_dist =
+        BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist =
+        BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    s_passkey = (uint32_t)passkey;
+    s_passkey_mode = 1;
+    s_passkey_action = 0;
+    s_bond_enabled = 1;
+    return (int)ESP_OK;
+}
+
+/** Current configured passkey (0 if Just Works / unset). */
+int klin_ble_passkey(void)
+{
+    return s_passkey_mode ? (int)s_passkey : 0;
+}
+
+/** Last PASSKEY_ACTION code (`BLE_SM_IOACT_*`), or 0. */
+int klin_ble_passkey_action(void)
+{
+    return s_passkey_action;
+}
+
+/**
+ * Inject a passkey for an outstanding INPUT/DISP action (override). Usually
+ * unnecessary when `bond_passkey` auto-injects the configured PIN.
+ */
+int klin_ble_passkey_inject(int passkey)
+{
+    struct ble_sm_io pkey;
+    uint16_t conn;
+
+    if (!s_inited || !s_passkey_mode) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (passkey < 0 || passkey > 999999) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+    conn = klin_ble_active_conn();
+    if (conn == BLE_HS_CONN_HANDLE_NONE) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+
+    memset(&pkey, 0, sizeof(pkey));
+    if (s_passkey_action == BLE_SM_IOACT_DISP ||
+        s_passkey_action == BLE_SM_IOACT_INPUT) {
+        pkey.action = (uint8_t)s_passkey_action;
+    } else {
+        pkey.action = BLE_SM_IOACT_INPUT;
+    }
+    pkey.passkey = (uint32_t)passkey;
+    return ble_sm_inject_io(conn, &pkey);
 }
 
 int klin_ble_bond_start(void)
