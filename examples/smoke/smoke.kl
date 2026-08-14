@@ -2,8 +2,60 @@
 import "../../esp_ble" ble
 
 fn main() {
-  let mut e = ble.gatt_uuid16(0xA001, 0xA002)
+  let mut e = ble.gatt_clear()
   if e != ble.err_ok() {
+    return
+  }
+  e = ble.gatt_add_uuid16(0xA001, 0xA002)
+  if e != ble.err_ok() {
+    return
+  }
+  e = ble.gatt_add_uuid16(0xB001, 0xB002)
+  if e != ble.err_ok() {
+    return
+  }
+  let mut svc128: [16]u8
+  let mut chr128: [16]u8
+  svc128[0] = 1
+  svc128[1] = 2
+  svc128[2] = 3
+  svc128[3] = 4
+  svc128[4] = 5
+  svc128[5] = 6
+  svc128[6] = 7
+  svc128[7] = 8
+  svc128[8] = 9
+  svc128[9] = 10
+  svc128[10] = 11
+  svc128[11] = 12
+  svc128[12] = 13
+  svc128[13] = 14
+  svc128[14] = 15
+  svc128[15] = 16
+  chr128[0] = 0x10
+  chr128[1] = 0x11
+  chr128[2] = 0x12
+  chr128[3] = 0x13
+  chr128[4] = 0x14
+  chr128[5] = 0x15
+  chr128[6] = 0x16
+  chr128[7] = 0x17
+  chr128[8] = 0x18
+  chr128[9] = 0x19
+  chr128[10] = 0x1a
+  chr128[11] = 0x1b
+  chr128[12] = 0x1c
+  chr128[13] = 0x1d
+  chr128[14] = 0x1e
+  chr128[15] = 0x1f
+  e = ble.gatt_add_uuid128(cast(*u8, &svc128[0]), cast(*u8, &chr128[0]))
+  if e != ble.err_ok() {
+    return
+  }
+  if ble.gatt_svc_count() != 3 {
+    return
+  }
+  if ble.gatt_svc_max() != 4 {
     return
   }
   if ble.gatt_svc_uuid16() != 0xA001 {
@@ -17,7 +69,11 @@ fn main() {
     return
   }
   // After init, uuid change must fail.
-  e = ble.gatt_uuid16(0xB001, 0xB002)
+  e = ble.gatt_uuid16(0xC001, 0xC002)
+  if e == ble.err_ok() {
+    return
+  }
+  e = ble.gatt_add_uuid16(0xD001, 0xD002)
   if e == ble.err_ok() {
     return
   }
@@ -26,10 +82,21 @@ fn main() {
   v[1] = 2
   v[2] = 3
   v[3] = 4
-  e = ble.gatt_set(cast(*u8, &v[0]), 4)
+  e = ble.gatt_set_at(0, cast(*u8, &v[0]), 4)
   if e != ble.err_ok() {
     return
   }
+  e = ble.gatt_set_at(1, cast(*u8, &v[0]), 2)
+  if e != ble.err_ok() {
+    return
+  }
+  let mut out: [4]u8
+  let n = ble.gatt_get_at(0, cast(*mut u8, &out[0]), 4)
+  if n != 4 {
+    return
+  }
+  let _n1 = ble.gatt_notify_at(1)
+  let _w1 = ble.gatt_written_at(1)
   e = ble.scan_start(500)
   if e != ble.err_ok() {
     return
@@ -54,6 +121,18 @@ fn main() {
     return
   }
   if !ble.central_connected() {
+    return
+  }
+  e = ble.gattc_select(1)
+  if e != ble.err_ok() {
+    return
+  }
+  e = ble.gattc_uuid16(0xA001, 0xA002)
+  if e != ble.err_ok() {
+    return
+  }
+  e = ble.gattc_uuid128(cast(*u8, &svc128[0]), cast(*u8, &chr128[0]))
+  if e != ble.err_ok() {
     return
   }
   e = ble.gattc_discover(1000)
@@ -98,6 +177,8 @@ fn main() {
   let _bc = ble.bond_count()
   let _bcl = ble.bond_clear()
   let _d = ble.central_disconnect()
-  let _v = ble.version()
+  if ble.version() != 8 {
+    return
+  }
   let _m = ble.scan_max()
 }

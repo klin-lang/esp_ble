@@ -2,65 +2,43 @@
 
 Thin **ESP-IDF NimBLE** bindings for [Klin](https://github.com/klin-lang/klin).
 
-The radio is in the **silicon**; this package does **not** belong in
-[`machine_esp`](https://github.com/klin-lang/machine_esp). Sibling of
-[`esp_wifi`](https://github.com/klin-lang/esp_wifi) / [`esp_eth`](https://github.com/klin-lang/esp_eth).
-
-Decision: Klin [issue 106](https://github.com/klin-lang/klin/blob/main/issues/106-esp-ble-idf.md).
-
-## Status (`@v0.7.0`)
+## Status (`@v0.8.0`)
 
 | API | Notes |
 |---|---|
-| `init` / `advertise` / … | Peripheral GAP |
-| `gatt_*` / `gatt_uuid16` | GATT server; optional UUID16 before `init` |
-| `scan_*` / `central_*` / `gattc_*` | Central scan + GATT client |
-| `bond_enable` / `bond_start` / `wait_bonded` | Just Works bonding |
-| `bond_passkey(pin)` / `passkey` / `passkey_inject` | **Fixed PIN** bonding (MITM) (`@v0.7.0`) |
-| 128-bit UUID tables / mesh | **Out of scope** (later) |
+| `gatt_uuid16` / `gatt_uuid128` | Slot 0 UUIDs before `init` |
+| `gatt_add_uuid16` / `gatt_add_uuid128` / `gatt_clear` | Up to **4** services (1 chr each) |
+| `gatt_set_at` / `gatt_get_at` / `gatt_notify_at` / `gatt_written_at` | Per-service index |
+| `gattc_select` / `gattc_uuid16` / `gattc_uuid128` | Client discover target |
+| Prior APIs | GAP / GATT / scan / client / bond / passkey unchanged |
 
-`version()` → `7`.
+`version()` → `8`. Default remains svc **0xFFF0** / chr **0xFFF1** when unset.
 
-## Usage (passkey / PIN)
+## Usage (128-bit + two services)
 
 ```klin
 import "github/klin-lang/esp_ble" ble
 
 @[cexport, codename("klin_app_main")]
 fn app() {
-  let mut e = ble.init()
-  if e != ble.err_ok() {
-    return
-  }
-  e = ble.bond_passkey(123456)
-  if e != ble.err_ok() {
-    return
-  }
-  e = ble.advertise("klin-pin")
-  if e != ble.err_ok() {
-    return
-  }
-  e = ble.wait_connected(120000)
-  if e != ble.err_ok() {
-    return
-  }
-  e = ble.bond_start()
-  e = ble.wait_bonded(60000)
+  let mut e = ble.gatt_clear()
+  e = ble.gatt_add_uuid16(0xA001, 0xA002)
+  let mut svc: [16]u8
+  let mut chr: [16]u8
+  // fill LE 128-bit UUIDs…
+  e = ble.gatt_add_uuid128(cast(*u8, &svc[0]), cast(*u8, &chr[0]))
+  e = ble.init()
+  e = ble.advertise("klin-multi")
 }
 ```
 
 ```sh
-klin get github/klin-lang/esp_ble@v0.7.0
+klin get github/klin-lang/esp_ble@v0.8.0
 ```
 
 ## Contract
 
-- Passkey is `0..=999999` (6 digits). Injected automatically on pair.
-- `bond_enable` = Just Works; `bond_passkey` = MITM + PIN (replaces JW config).
+- Max **4** services; each has one R/W/Notify characteristic.
+- UUID table frozen at `init`.
+- 128-bit buffers are **16 bytes little-endian** (Bluetooth wire order).
 - Errors are `i32` (0 = OK).
-
-## Links
-
-- Wi‑Fi sibling: https://github.com/klin-lang/esp_wifi
-- Ethernet sibling: https://github.com/klin-lang/esp_eth
-- Chip MMIO: https://github.com/klin-lang/machine_esp

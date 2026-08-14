@@ -32,12 +32,28 @@ void ble_store_config_init(void);
 #define KLIN_BLE_BOND_BIT           BIT6
 #define KLIN_BLE_NAME_MAX           28
 #define KLIN_BLE_CCCD_UUID16        0x2902
+#define KLIN_BLE_GATT_SVC_MAX       4
+#define KLIN_BLE_UUID_KIND_16       16
+#define KLIN_BLE_UUID_KIND_128      128
 
 typedef struct {
     ble_addr_t addr;
     int8_t rssi;
     char name[KLIN_BLE_SCAN_NAME_MAX];
 } klin_ble_scan_row_t;
+
+typedef struct {
+    uint8_t kind; /* 16 or 128 */
+    ble_uuid16_t svc16;
+    ble_uuid16_t chr16;
+    ble_uuid128_t svc128;
+    ble_uuid128_t chr128;
+    uint16_t val_handle;
+    uint8_t value[KLIN_BLE_GATT_VALUE_MAX];
+    uint16_t value_len;
+    int written;
+    int notify_enabled;
+} klin_ble_gatt_slot_t;
 
 static EventGroupHandle_t s_ble_events;
 static int s_inited;
@@ -52,16 +68,11 @@ static char s_name[KLIN_BLE_NAME_MAX];
 
 static uint16_t s_conn_handle;
 static uint16_t s_central_conn_handle;
-static uint16_t s_chr_val_handle;
-static uint8_t s_gatt_value[KLIN_BLE_GATT_VALUE_MAX];
-static uint16_t s_gatt_len;
-static int s_gatt_written;
-static int s_gatt_notify_enabled;
 
 static klin_ble_scan_row_t s_scan[KLIN_BLE_SCAN_MAX];
 static int s_scan_count;
 
-/* GATT client (central) — discovers fixed 0xFFF0 / 0xFFF1 on the peer. */
+/* GATT client (central) — discovers selected svc/chr on the peer. */
 static uint16_t s_gattc_svc_start;
 static uint16_t s_gattc_svc_end;
 static uint16_t s_gattc_val_handle;
@@ -81,11 +92,113 @@ static int s_passkey_mode;
 static uint32_t s_passkey;
 static int s_passkey_action; /* last BLE_SM_IOACT_* seen */
 
-/* Mutable: set via gatt_uuid16() before init (server) or anytime (client). */
-static ble_uuid16_t s_svc_uuid = BLE_UUID16_INIT(KLIN_BLE_GATT_SVC_UUID16);
-static ble_uuid16_t s_chr_uuid = BLE_UUID16_INIT(KLIN_BLE_GATT_CHR_UUID16);
-static const ble_uuid16_t s_cccd_uuid = BLE_UUID16_INIT(KLIN_BLE_CCCD_UUID16);
+/* Server GATT table (max KLIN_BLE_GATT_SVC_MAX). Built before init. */
+static klin_ble_gatt_slot_t s_slots[KLIN_BLE_GATT_SVC_MAX];
+static int s_slot_count;
 static int s_gatt_registered;
+static struct ble_gatt_chr_def s_chr_defs[KLIN_BLE_GATT_SVC_MAX][2];
+static struct ble_gatt_svc_def s_gatt_svcs[KLIN_BLE_GATT_SVC_MAX + 1];
+
+/* Client discover target (defaults to slot 0 / override via gattc_uuid*). */
+static int s_gattc_sel;
+static int s_gattc_override;
+static uint8_t s_gattc_kind;
+static ble_uuid16_t s_gattc_svc16;
+static ble_uuid16_t s_gattc_chr16;
+static ble_uuid128_t s_gattc_svc128;
+static ble_uuid128_t s_gattc_chr128;
+
+static const ble_uuid16_t s_cccd_uuid = BLE_UUID16_INIT(KLIN_BLE_CCCD_UUID16);
+
+static int klin_ble_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
+                                struct ble_gatt_access_ctxt *ctxt, void *arg);
+
+static const ble_uuid_t *klin_ble_slot_svc_uuid(int idx)
+{
+    if (idx < 0 || idx >= s_slot_count) {
+        return NULL;
+    }
+    if (s_slots[idx].kind == KLIN_BLE_UUID_KIND_128) {
+        return &s_slots[idx].svc128.u;
+    }
+    return &s_slots[idx].svc16.u;
+}
+
+static const ble_uuid_t *klin_ble_slot_chr_uuid(int idx)
+{
+    if (idx < 0 || idx >= s_slot_count) {
+        return NULL;
+    }
+    if (s_slots[idx].kind == KLIN_BLE_UUID_KIND_128) {
+        return &s_slots[idx].chr128.u;
+    }
+    return &s_slots[idx].chr16.u;
+}
+
+static const ble_uuid_t *klin_ble_gattc_svc_uuid(void)
+{
+    if (s_gattc_override) {
+        if (s_gattc_kind == KLIN_BLE_UUID_KIND_128) {
+            return &s_gattc_svc128.u;
+        }
+        return &s_gattc_svc16.u;
+    }
+    return klin_ble_slot_svc_uuid(s_gattc_sel);
+}
+
+static const ble_uuid_t *klin_ble_gattc_chr_uuid(void)
+{
+    if (s_gattc_override) {
+        if (s_gattc_kind == KLIN_BLE_UUID_KIND_128) {
+            return &s_gattc_chr128.u;
+        }
+        return &s_gattc_chr16.u;
+    }
+    return klin_ble_slot_chr_uuid(s_gattc_sel);
+}
+
+static int klin_ble_slot_find_handle(uint16_t attr_handle)
+{
+    int i;
+
+    for (i = 0; i < s_slot_count; i++) {
+        if (s_slots[i].val_handle == attr_handle) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void klin_ble_slots_ensure_default(void)
+{
+    if (s_slot_count > 0) {
+        return;
+    }
+    memset(&s_slots[0], 0, sizeof(s_slots[0]));
+    s_slots[0].kind = KLIN_BLE_UUID_KIND_16;
+    s_slots[0].svc16 = (ble_uuid16_t)BLE_UUID16_INIT(KLIN_BLE_GATT_SVC_UUID16);
+    s_slots[0].chr16 = (ble_uuid16_t)BLE_UUID16_INIT(KLIN_BLE_GATT_CHR_UUID16);
+    s_slot_count = 1;
+}
+
+static void klin_ble_build_gatt_svcs(void)
+{
+    int i;
+
+    klin_ble_slots_ensure_default();
+    memset(s_chr_defs, 0, sizeof(s_chr_defs));
+    memset(s_gatt_svcs, 0, sizeof(s_gatt_svcs));
+    for (i = 0; i < s_slot_count; i++) {
+        s_chr_defs[i][0].uuid = klin_ble_slot_chr_uuid(i);
+        s_chr_defs[i][0].access_cb = klin_ble_gatt_access;
+        s_chr_defs[i][0].flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE |
+                                 BLE_GATT_CHR_F_NOTIFY;
+        s_chr_defs[i][0].val_handle = &s_slots[i].val_handle;
+        s_gatt_svcs[i].type = BLE_GATT_SVC_TYPE_PRIMARY;
+        s_gatt_svcs[i].uuid = klin_ble_slot_svc_uuid(i);
+        s_gatt_svcs[i].characteristics = s_chr_defs[i];
+    }
+}
 
 static void klin_ble_host_task(void *param)
 {
@@ -189,7 +302,7 @@ static int klin_ble_gattc_on_chr(uint16_t conn_handle,
 
     (void)arg;
     if (error->status == 0 && chr != NULL) {
-        if (ble_uuid_cmp(&chr->uuid.u, &s_chr_uuid.u) == 0) {
+        if (ble_uuid_cmp(&chr->uuid.u, klin_ble_gattc_chr_uuid()) == 0) {
             s_gattc_val_handle = chr->val_handle;
         }
         return 0;
@@ -244,7 +357,8 @@ static int klin_ble_gattc_on_svc(uint16_t conn_handle,
             return 0;
         }
         rc = ble_gattc_disc_chrs_by_uuid(conn_handle, s_gattc_svc_start,
-                                         s_gattc_svc_end, &s_chr_uuid.u,
+                                         s_gattc_svc_end,
+                                         klin_ble_gattc_chr_uuid(),
                                          klin_ble_gattc_on_chr, NULL);
         if (rc != 0) {
             s_gattc_op_rc = rc;
@@ -309,8 +423,6 @@ static int klin_ble_gattc_on_write(uint16_t conn_handle,
     return 0;
 }
 
-static int klin_ble_gap_event(struct ble_gap_event *event, void *arg);
-
 static int klin_ble_wait_sync(void)
 {
     TickType_t ticks = pdMS_TO_TICKS(5000);
@@ -370,17 +482,20 @@ static int klin_ble_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
                                 struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     int rc;
+    int idx;
 
     (void)conn_handle;
     (void)arg;
 
-    if (attr_handle != s_chr_val_handle) {
+    idx = klin_ble_slot_find_handle(attr_handle);
+    if (idx < 0) {
         return BLE_ATT_ERR_UNLIKELY;
     }
 
     switch (ctxt->op) {
     case BLE_GATT_ACCESS_OP_READ_CHR:
-        rc = os_mbuf_append(ctxt->om, s_gatt_value, s_gatt_len);
+        rc = os_mbuf_append(ctxt->om, s_slots[idx].value,
+                            s_slots[idx].value_len);
         return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 
     case BLE_GATT_ACCESS_OP_WRITE_CHR: {
@@ -388,12 +503,12 @@ static int klin_ble_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
         if (om_len > KLIN_BLE_GATT_VALUE_MAX) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
-        rc = ble_hs_mbuf_to_flat(ctxt->om, s_gatt_value, om_len, NULL);
+        rc = ble_hs_mbuf_to_flat(ctxt->om, s_slots[idx].value, om_len, NULL);
         if (rc != 0) {
             return BLE_ATT_ERR_UNLIKELY;
         }
-        s_gatt_len = om_len;
-        s_gatt_written = 1;
+        s_slots[idx].value_len = om_len;
+        s_slots[idx].written = 1;
         return 0;
     }
 
@@ -402,34 +517,14 @@ static int klin_ble_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
     }
 }
 
-static const struct ble_gatt_svc_def s_gatt_svcs[] = {
-    {
-        .type = BLE_GATT_SVC_TYPE_PRIMARY,
-        .uuid = &s_svc_uuid.u,
-        .characteristics =
-            (struct ble_gatt_chr_def[]){
-                {
-                    .uuid = &s_chr_uuid.u,
-                    .access_cb = klin_ble_gatt_access,
-                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE |
-                             BLE_GATT_CHR_F_NOTIFY,
-                    .val_handle = &s_chr_val_handle,
-                },
-                {
-                    0,
-                },
-            },
-    },
-    {
-        0,
-    },
-};
-
 static int klin_ble_start_advertise(void)
 {
     struct ble_hs_adv_fields fields;
     struct ble_gap_adv_params adv_params;
-    ble_uuid16_t uuids16[1];
+    ble_uuid16_t uuids16[KLIN_BLE_GATT_SVC_MAX];
+    ble_uuid128_t uuids128[1];
+    int n16 = 0;
+    int i;
     int rc;
 
     if (!s_synced) {
@@ -445,10 +540,24 @@ static int klin_ble_start_advertise(void)
         fields.name_len = (uint8_t)strlen(s_name);
         fields.name_is_complete = 1;
     }
-    uuids16[0] = s_svc_uuid;
-    fields.uuids16 = uuids16;
-    fields.num_uuids16 = 1;
-    fields.uuids16_is_complete = 1;
+
+    for (i = 0; i < s_slot_count; i++) {
+        if (s_slots[i].kind == KLIN_BLE_UUID_KIND_16 &&
+            n16 < KLIN_BLE_GATT_SVC_MAX) {
+            uuids16[n16++] = s_slots[i].svc16;
+        }
+    }
+    if (n16 > 0) {
+        fields.uuids16 = uuids16;
+        fields.num_uuids16 = (uint8_t)n16;
+        fields.uuids16_is_complete = 1;
+    } else if (s_slot_count > 0 &&
+               s_slots[0].kind == KLIN_BLE_UUID_KIND_128) {
+        uuids128[0] = s_slots[0].svc128;
+        fields.uuids128 = uuids128;
+        fields.num_uuids128 = 1;
+        fields.uuids128_is_complete = 1;
+    }
 
     rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
@@ -526,9 +635,13 @@ static int klin_ble_gap_event(struct ble_gap_event *event, void *arg)
                 xEventGroupClearBits(s_ble_events, KLIN_BLE_CENTRAL_CONN_BIT);
             }
         } else {
+            int i;
+
             s_connected = 0;
             s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
-            s_gatt_notify_enabled = 0;
+            for (i = 0; i < s_slot_count; i++) {
+                s_slots[i].notify_enabled = 0;
+            }
             klin_ble_bond_link_reset();
             if (s_ble_events != NULL) {
                 xEventGroupClearBits(s_ble_events, KLIN_BLE_CONNECTED_BIT);
@@ -603,11 +716,13 @@ static int klin_ble_gap_event(struct ble_gap_event *event, void *arg)
         s_advertising = 0;
         return 0;
 
-    case BLE_GAP_EVENT_SUBSCRIBE:
-        if (event->subscribe.attr_handle == s_chr_val_handle) {
-            s_gatt_notify_enabled = event->subscribe.cur_notify ? 1 : 0;
+    case BLE_GAP_EVENT_SUBSCRIBE: {
+        int idx = klin_ble_slot_find_handle(event->subscribe.attr_handle);
+        if (idx >= 0) {
+            s_slots[idx].notify_enabled = event->subscribe.cur_notify ? 1 : 0;
         }
         return 0;
+    }
 
     case BLE_GAP_EVENT_DISC:
         klin_ble_scan_add(&event->disc);
@@ -684,6 +799,7 @@ int klin_ble_init(void)
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
+    klin_ble_build_gatt_svcs();
     rc = ble_gatts_count_cfg(s_gatt_svcs);
     if (rc != 0) {
         return rc;
@@ -711,10 +827,17 @@ int klin_ble_init(void)
     s_passkey_action = 0;
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
-    s_gatt_len = 0;
-    s_gatt_written = 0;
-    s_gatt_notify_enabled = 0;
-    memset(s_gatt_value, 0, sizeof(s_gatt_value));
+    s_gattc_sel = 0;
+    s_gattc_override = 0;
+    {
+        int i;
+        for (i = 0; i < s_slot_count; i++) {
+            s_slots[i].value_len = 0;
+            s_slots[i].written = 0;
+            s_slots[i].notify_enabled = 0;
+            memset(s_slots[i].value, 0, sizeof(s_slots[i].value));
+        }
+    }
     memset(s_scan, 0, sizeof(s_scan));
     s_name[0] = '\0';
     klin_ble_gattc_reset();
@@ -832,51 +955,77 @@ int klin_ble_stop(void)
     s_central_connected = 0;
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
-    s_gatt_notify_enabled = 0;
+    {
+        int i;
+        for (i = 0; i < KLIN_BLE_GATT_SVC_MAX; i++) {
+            s_slots[i].notify_enabled = 0;
+        }
+    }
     return rc;
 }
 
-int klin_ble_gatt_set(const uint8_t *data, int len)
+int klin_ble_gatt_set_at(int index, const uint8_t *data, int len)
 {
     if (!s_inited) {
         return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (index < 0 || index >= s_slot_count) {
+        return (int)ESP_ERR_INVALID_ARG;
     }
     if (data == NULL || len < 0 || len > KLIN_BLE_GATT_VALUE_MAX) {
         return (int)ESP_ERR_INVALID_ARG;
     }
     if (len > 0) {
-        memcpy(s_gatt_value, data, (size_t)len);
+        memcpy(s_slots[index].value, data, (size_t)len);
     }
-    s_gatt_len = (uint16_t)len;
+    s_slots[index].value_len = (uint16_t)len;
     return (int)ESP_OK;
 }
 
-int klin_ble_gatt_get(uint8_t *out, int max_len)
+int klin_ble_gatt_set(const uint8_t *data, int len)
+{
+    return klin_ble_gatt_set_at(0, data, len);
+}
+
+int klin_ble_gatt_get_at(int index, uint8_t *out, int max_len)
 {
     int n;
 
     if (!s_inited) {
         return -1;
     }
-    if (out == NULL || max_len < 0) {
+    if (index < 0 || index >= s_slot_count || out == NULL || max_len < 0) {
         return -1;
     }
-    n = (int)s_gatt_len;
+    n = (int)s_slots[index].value_len;
     if (n > max_len) {
         n = max_len;
     }
     if (n > 0) {
-        memcpy(out, s_gatt_value, (size_t)n);
+        memcpy(out, s_slots[index].value, (size_t)n);
     }
     return n;
 }
 
-int klin_ble_gatt_len(void)
+int klin_ble_gatt_get(uint8_t *out, int max_len)
 {
-    return (int)s_gatt_len;
+    return klin_ble_gatt_get_at(0, out, max_len);
 }
 
-int klin_ble_gatt_notify(void)
+int klin_ble_gatt_len_at(int index)
+{
+    if (index < 0 || index >= s_slot_count) {
+        return 0;
+    }
+    return (int)s_slots[index].value_len;
+}
+
+int klin_ble_gatt_len(void)
+{
+    return klin_ble_gatt_len_at(0);
+}
+
+int klin_ble_gatt_notify_at(int index)
 {
     struct os_mbuf *om;
     int rc;
@@ -884,24 +1033,42 @@ int klin_ble_gatt_notify(void)
     if (!s_inited) {
         return (int)ESP_ERR_INVALID_STATE;
     }
-    if (!s_connected || !s_gatt_notify_enabled ||
+    if (index < 0 || index >= s_slot_count) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+    if (!s_connected || !s_slots[index].notify_enabled ||
         s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
         return (int)ESP_OK;
     }
 
-    om = ble_hs_mbuf_from_flat(s_gatt_value, s_gatt_len);
+    om = ble_hs_mbuf_from_flat(s_slots[index].value, s_slots[index].value_len);
     if (om == NULL) {
         return (int)ESP_ERR_NO_MEM;
     }
-    rc = ble_gatts_notify_custom(s_conn_handle, s_chr_val_handle, om);
+    rc = ble_gatts_notify_custom(s_conn_handle, s_slots[index].val_handle, om);
     return rc;
+}
+
+int klin_ble_gatt_notify(void)
+{
+    return klin_ble_gatt_notify_at(0);
+}
+
+int klin_ble_gatt_written_at(int index)
+{
+    int w;
+
+    if (index < 0 || index >= s_slot_count) {
+        return 0;
+    }
+    w = s_slots[index].written;
+    s_slots[index].written = 0;
+    return w ? 1 : 0;
 }
 
 int klin_ble_gatt_written(void)
 {
-    int w = s_gatt_written;
-    s_gatt_written = 0;
-    return w ? 1 : 0;
+    return klin_ble_gatt_written_at(0);
 }
 
 int klin_ble_scan_start(int duration_ms)
@@ -1140,8 +1307,14 @@ int klin_ble_gattc_discover(int timeout_ms)
         xEventGroupClearBits(s_ble_events, KLIN_BLE_GATTC_DISC_BIT);
     }
 
-    rc = ble_gattc_disc_svc_by_uuid(s_central_conn_handle, &s_svc_uuid.u,
-                                    klin_ble_gattc_on_svc, NULL);
+    {
+        const ble_uuid_t *svc_uuid = klin_ble_gattc_svc_uuid();
+        if (svc_uuid == NULL) {
+            return (int)ESP_ERR_INVALID_STATE;
+        }
+        rc = ble_gattc_disc_svc_by_uuid(s_central_conn_handle, svc_uuid,
+                                        klin_ble_gattc_on_svc, NULL);
+    }
     if (rc != 0) {
         return rc;
     }
@@ -1448,9 +1621,8 @@ int klin_ble_bond_clear(void)
 }
 
 /**
- * Set 16-bit service/characteristic UUIDs used by the peripheral GATT DB and
- * by `gattc_discover`. Must be called before `init` (after registration the
- * server table is frozen).
+ * Replace slot 0 with a 16-bit svc/chr pair (creates slot 0 if empty).
+ * Must be called before `init`.
  */
 int klin_ble_gatt_uuid16(int svc_uuid16, int chr_uuid16)
 {
@@ -1461,17 +1633,165 @@ int klin_ble_gatt_uuid16(int svc_uuid16, int chr_uuid16)
     if (s_gatt_registered || s_inited) {
         return (int)ESP_ERR_INVALID_STATE;
     }
-    s_svc_uuid.value = (uint16_t)svc_uuid16;
-    s_chr_uuid.value = (uint16_t)chr_uuid16;
+    if (s_slot_count < 1) {
+        s_slot_count = 1;
+        memset(&s_slots[0], 0, sizeof(s_slots[0]));
+    }
+    s_slots[0].kind = KLIN_BLE_UUID_KIND_16;
+    s_slots[0].svc16 = (ble_uuid16_t)BLE_UUID16_INIT((uint16_t)svc_uuid16);
+    s_slots[0].chr16 = (ble_uuid16_t)BLE_UUID16_INIT((uint16_t)chr_uuid16);
+    s_gattc_override = 0;
+    s_gattc_sel = 0;
     return (int)ESP_OK;
+}
+
+/** Replace slot 0 with a 128-bit svc/chr (16 bytes LE each). Before `init`. */
+int klin_ble_gatt_uuid128(const uint8_t *svc16, const uint8_t *chr16)
+{
+    if (svc16 == NULL || chr16 == NULL) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+    if (s_gatt_registered || s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (s_slot_count < 1) {
+        s_slot_count = 1;
+        memset(&s_slots[0], 0, sizeof(s_slots[0]));
+    }
+    s_slots[0].kind = KLIN_BLE_UUID_KIND_128;
+    s_slots[0].svc128.u.type = BLE_UUID_TYPE_128;
+    s_slots[0].chr128.u.type = BLE_UUID_TYPE_128;
+    memcpy(s_slots[0].svc128.value, svc16, 16);
+    memcpy(s_slots[0].chr128.value, chr16, 16);
+    s_gattc_override = 0;
+    s_gattc_sel = 0;
+    return (int)ESP_OK;
+}
+
+/** Append a 16-bit svc/chr (max KLIN_BLE_GATT_SVC_MAX). Before `init`. */
+int klin_ble_gatt_add_uuid16(int svc_uuid16, int chr_uuid16)
+{
+    int i;
+
+    if (svc_uuid16 <= 0 || svc_uuid16 > 0xFFFF || chr_uuid16 <= 0 ||
+        chr_uuid16 > 0xFFFF) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+    if (s_gatt_registered || s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (s_slot_count >= KLIN_BLE_GATT_SVC_MAX) {
+        return (int)ESP_ERR_NO_MEM;
+    }
+    i = s_slot_count++;
+    memset(&s_slots[i], 0, sizeof(s_slots[i]));
+    s_slots[i].kind = KLIN_BLE_UUID_KIND_16;
+    s_slots[i].svc16 = (ble_uuid16_t)BLE_UUID16_INIT((uint16_t)svc_uuid16);
+    s_slots[i].chr16 = (ble_uuid16_t)BLE_UUID16_INIT((uint16_t)chr_uuid16);
+    return (int)ESP_OK;
+}
+
+/** Append a 128-bit svc/chr. Before `init`. */
+int klin_ble_gatt_add_uuid128(const uint8_t *svc16, const uint8_t *chr16)
+{
+    int i;
+
+    if (svc16 == NULL || chr16 == NULL) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+    if (s_gatt_registered || s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (s_slot_count >= KLIN_BLE_GATT_SVC_MAX) {
+        return (int)ESP_ERR_NO_MEM;
+    }
+    i = s_slot_count++;
+    memset(&s_slots[i], 0, sizeof(s_slots[i]));
+    s_slots[i].kind = KLIN_BLE_UUID_KIND_128;
+    s_slots[i].svc128.u.type = BLE_UUID_TYPE_128;
+    s_slots[i].chr128.u.type = BLE_UUID_TYPE_128;
+    memcpy(s_slots[i].svc128.value, svc16, 16);
+    memcpy(s_slots[i].chr128.value, chr16, 16);
+    return (int)ESP_OK;
+}
+
+/** Clear the service table (must `gatt_add_*` / `gatt_uuid*` before init). */
+int klin_ble_gatt_clear(void)
+{
+    if (s_gatt_registered || s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    s_slot_count = 0;
+    memset(s_slots, 0, sizeof(s_slots));
+    return (int)ESP_OK;
+}
+
+int klin_ble_gatt_svc_count(void)
+{
+    if (s_slot_count == 0 && !s_inited) {
+        return 1; /* default will be installed at init */
+    }
+    return s_slot_count > 0 ? s_slot_count : (s_inited ? s_slot_count : 1);
 }
 
 int klin_ble_gatt_svc_uuid16(void)
 {
-    return (int)s_svc_uuid.value;
+    if (s_slot_count < 1) {
+        return KLIN_BLE_GATT_SVC_UUID16;
+    }
+    if (s_slots[0].kind != KLIN_BLE_UUID_KIND_16) {
+        return 0;
+    }
+    return (int)s_slots[0].svc16.value;
 }
 
 int klin_ble_gatt_chr_uuid16(void)
 {
-    return (int)s_chr_uuid.value;
+    if (s_slot_count < 1) {
+        return KLIN_BLE_GATT_CHR_UUID16;
+    }
+    if (s_slots[0].kind != KLIN_BLE_UUID_KIND_16) {
+        return 0;
+    }
+    return (int)s_slots[0].chr16.value;
+}
+
+/** Select server slot UUID for subsequent `gattc_discover`. */
+int klin_ble_gattc_select(int index)
+{
+    if (index < 0 || index >= (s_slot_count > 0 ? s_slot_count : 1)) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+    s_gattc_sel = index;
+    s_gattc_override = 0;
+    return (int)ESP_OK;
+}
+
+/** Override discover target with 16-bit UUIDs (central-only peers). */
+int klin_ble_gattc_uuid16(int svc_uuid16, int chr_uuid16)
+{
+    if (svc_uuid16 <= 0 || svc_uuid16 > 0xFFFF || chr_uuid16 <= 0 ||
+        chr_uuid16 > 0xFFFF) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+    s_gattc_kind = KLIN_BLE_UUID_KIND_16;
+    s_gattc_svc16 = (ble_uuid16_t)BLE_UUID16_INIT((uint16_t)svc_uuid16);
+    s_gattc_chr16 = (ble_uuid16_t)BLE_UUID16_INIT((uint16_t)chr_uuid16);
+    s_gattc_override = 1;
+    return (int)ESP_OK;
+}
+
+/** Override discover target with 128-bit UUIDs (16 bytes LE each). */
+int klin_ble_gattc_uuid128(const uint8_t *svc16, const uint8_t *chr16)
+{
+    if (svc16 == NULL || chr16 == NULL) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+    s_gattc_kind = KLIN_BLE_UUID_KIND_128;
+    s_gattc_svc128.u.type = BLE_UUID_TYPE_128;
+    s_gattc_chr128.u.type = BLE_UUID_TYPE_128;
+    memcpy(s_gattc_svc128.value, svc16, 16);
+    memcpy(s_gattc_chr128.value, chr16, 16);
+    s_gattc_override = 1;
+    return (int)ESP_OK;
 }
