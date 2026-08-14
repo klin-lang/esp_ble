@@ -2,17 +2,17 @@
 
 Thin **ESP-IDF NimBLE** bindings for [Klin](https://github.com/klin-lang/klin).
 
-## Status (`@v0.9.0`)
+## Status (`@v0.10.0`)
 
 | API | Notes |
 |---|---|
-| `privacy_enable` / `privacy_disable` | Host RPA after `init`, before advertise/scan |
-| `privacy_enabled` / `own_addr_type` / `own_addr` | Query own address |
-| Prior APIs | GAP / GATT / multi-svc / UUID128 / client / bond / passkey |
+| `mesh_enable` | NimBLE Mesh node (Gen OnOff); needs `CONFIG_BT_NIMBLE_MESH` |
+| `mesh_provisioned` / `mesh_primary_addr` / `mesh_onoff*` / `mesh_oob_number` / `mesh_reset` | Node state |
+| Prior APIs | GAP / GATT / multi-svc / UUID128 / client / bond / passkey / privacy |
 
-`version()` → `9`. Bonding already distributes IRK (`bond_enable` / `bond_passkey`) for peer resolution.
+`version()` → `10`. Mesh is **not** the same path as `advertise` — enable mesh after `init`, then provision from a phone/app.
 
-## Usage (privacy / RPA)
+## Usage (Mesh OnOff node)
 
 ```klin
 import "github/klin-lang/esp_ble" ble
@@ -20,17 +20,21 @@ import "github/klin-lang/esp_ble" ble
 @[cexport, codename("klin_app_main")]
 fn app() {
   let mut e = ble.init()
-  e = ble.privacy_enable()
-  e = ble.advertise("klin-rpa")
+  e = ble.mesh_enable()
+  while true {
+    if ble.mesh_onoff_changed() {
+      let _o = ble.mesh_onoff()
+    }
+  }
 }
 ```
 
 ```sh
-klin get github/klin-lang/esp_ble@v0.9.0
+klin get github/klin-lang/esp_ble@v0.10.0
 ```
 
 ## Contract
 
-- Call `privacy_enable` **before** advertise / scan / connect (not while radio is active).
-- Host-based RPA (`ble_hs_pvcy_rpa_config`); rotation interval = IDF `CONFIG_BT_NIMBLE_RPA_TIMEOUT`.
+- Mesh requires IDF `CONFIG_BT_NIMBLE_MESH` (+ PB-ADV / PB-GATT as needed).
+- Without that Kconfig, `mesh_enable` returns not-supported.
 - No Klin GC / hidden heap. Errors are `i32` (0 = OK).

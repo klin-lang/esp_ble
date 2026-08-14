@@ -7,7 +7,7 @@
  * Central: scan + connect + gattc_discover (slot select or gattc_uuid*).
  * Bonding: Just Works or fixed passkey.
  * Privacy: host RPA via privacy_enable (after init, before advertise/scan).
- * Mesh later.
+ * Mesh: NimBLE node (Gen OnOff) via mesh_enable — needs CONFIG_BT_NIMBLE_MESH.
  */
 #pragma once
 
@@ -117,6 +117,25 @@ int klin_ble_privacy_enabled(void);
 int klin_ble_own_addr_type(void);
 /** Copy 6-byte own address into `out6`. */
 int klin_ble_own_addr(uint8_t *out6);
+
+/**
+ * Enable NimBLE Mesh node (Gen OnOff server). After `init`.
+ * Requires `CONFIG_BT_NIMBLE_MESH`. Starts PB-ADV + PB-GATT if unprovisioned.
+ */
+int klin_ble_mesh_enable(void);
+int klin_ble_mesh_enabled(void);
+int klin_ble_mesh_provisioned(void);
+/** Primary unicast address, or 0 if unprovisioned. */
+int klin_ble_mesh_primary_addr(void);
+/** Local Generic OnOff state (0/1). */
+int klin_ble_mesh_onoff(void);
+int klin_ble_mesh_onoff_set(int onoff);
+/** 1 if OnOff changed since last call (clears). */
+int klin_ble_mesh_onoff_changed(void);
+/** Last OOB output number from provisioning (0 if none). */
+int klin_ble_mesh_oob_number(void);
+/** Node reset (leaves network). */
+int klin_ble_mesh_reset(void);
 
 #ifdef __cplusplus
 }

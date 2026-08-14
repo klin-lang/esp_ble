@@ -10,6 +10,7 @@
 /// `@v0.7.0` passkey/PIN bonding via `bond_passkey` (MITM).
 /// `@v0.8.0` 128-bit UUID + up to 4 services (`gatt_add_*` / `gatt_*_at`).
 /// `@v0.9.0` LE privacy / host RPA (`privacy_enable` before advertise/scan).
+/// `@v0.10.0` NimBLE Mesh node — Gen OnOff (`mesh_enable`; needs CONFIG_BT_NIMBLE_MESH).
 module esp_ble
 
 @[link("nimble_idf.c")]
@@ -199,6 +200,33 @@ fn klin_ble_own_addr_type(): i32
 
 @[cimport, cheader, codename("klin_ble_own_addr")]
 fn klin_ble_own_addr(out6: *mut u8): i32
+
+@[cimport, cheader, codename("klin_ble_mesh_enable")]
+fn klin_ble_mesh_enable(): i32
+
+@[cimport, cheader, codename("klin_ble_mesh_enabled")]
+fn klin_ble_mesh_enabled(): i32
+
+@[cimport, cheader, codename("klin_ble_mesh_provisioned")]
+fn klin_ble_mesh_provisioned(): i32
+
+@[cimport, cheader, codename("klin_ble_mesh_primary_addr")]
+fn klin_ble_mesh_primary_addr(): i32
+
+@[cimport, cheader, codename("klin_ble_mesh_onoff")]
+fn klin_ble_mesh_onoff(): i32
+
+@[cimport, cheader, codename("klin_ble_mesh_onoff_set")]
+fn klin_ble_mesh_onoff_set(onoff: i32): i32
+
+@[cimport, cheader, codename("klin_ble_mesh_onoff_changed")]
+fn klin_ble_mesh_onoff_changed(): i32
+
+@[cimport, cheader, codename("klin_ble_mesh_oob_number")]
+fn klin_ble_mesh_oob_number(): i32
+
+@[cimport, cheader, codename("klin_ble_mesh_reset")]
+fn klin_ble_mesh_reset(): i32
 
 /// `ESP_OK` / NimBLE success (0).
 pub fn err_ok(): i32 {
@@ -482,4 +510,42 @@ pub fn own_addr_type(): i32 {
 /// Copy 6-byte own BD_ADDR into `out6`.
 pub fn own_addr(out6: *mut u8): i32 {
     return klin_ble_own_addr(out6)
+}
+
+/// NimBLE Mesh node (Gen OnOff). After `init`. Needs `CONFIG_BT_NIMBLE_MESH`.
+pub fn mesh_enable(): i32 {
+    return klin_ble_mesh_enable()
+}
+
+pub fn mesh_enabled(): bool {
+    return klin_ble_mesh_enabled() != 0
+}
+
+pub fn mesh_provisioned(): bool {
+    return klin_ble_mesh_provisioned() != 0
+}
+
+pub fn mesh_primary_addr(): i32 {
+    return klin_ble_mesh_primary_addr()
+}
+
+pub fn mesh_onoff(): i32 {
+    return klin_ble_mesh_onoff()
+}
+
+pub fn mesh_onoff_set(onoff: i32): i32 {
+    return klin_ble_mesh_onoff_set(onoff)
+}
+
+/// Clears on read.
+pub fn mesh_onoff_changed(): bool {
+    return klin_ble_mesh_onoff_changed() != 0
+}
+
+pub fn mesh_oob_number(): i32 {
+    return klin_ble_mesh_oob_number()
+}
+
+pub fn mesh_reset(): i32 {
+    return klin_ble_mesh_reset()
 }
