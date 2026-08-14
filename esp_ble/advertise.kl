@@ -8,140 +8,180 @@
 /// `@v0.5.0` bonding: Just Works pair + NVS store (`bond_enable` / `bond_start`).
 /// `@v0.6.0` custom 16-bit UUIDs via `gatt_uuid16` (before `init`).
 /// `@v0.7.0` passkey/PIN bonding via `bond_passkey` (MITM).
+/// `@v0.8.0` 128-bit UUID + up to 4 services (`gatt_add_*` / `gatt_*_at`).
 module esp_ble
 
 @[link("nimble_idf.c")]
 @[cinclude("nimble_idf.h")]
-@[cimport, codename("klin_ble_init")]
+@[cimport, cheader, codename("klin_ble_init")]
 fn klin_ble_init(): i32
 
-@[cimport, codename("klin_ble_gatt_uuid16")]
+@[cimport, cheader, codename("klin_ble_gatt_uuid16")]
 fn klin_ble_gatt_uuid16(svc_uuid16: i32, chr_uuid16: i32): i32
 
-@[cimport, codename("klin_ble_gatt_svc_uuid16")]
+@[cimport, cheader, codename("klin_ble_gatt_uuid128")]
+fn klin_ble_gatt_uuid128(svc16: *u8, chr16: *u8): i32
+
+@[cimport, cheader, codename("klin_ble_gatt_add_uuid16")]
+fn klin_ble_gatt_add_uuid16(svc_uuid16: i32, chr_uuid16: i32): i32
+
+@[cimport, cheader, codename("klin_ble_gatt_add_uuid128")]
+fn klin_ble_gatt_add_uuid128(svc16: *u8, chr16: *u8): i32
+
+@[cimport, cheader, codename("klin_ble_gatt_clear")]
+fn klin_ble_gatt_clear(): i32
+
+@[cimport, cheader, codename("klin_ble_gatt_svc_count")]
+fn klin_ble_gatt_svc_count(): i32
+
+@[cimport, cheader, codename("klin_ble_gatt_svc_uuid16")]
 fn klin_ble_gatt_svc_uuid16(): i32
 
-@[cimport, codename("klin_ble_gatt_chr_uuid16")]
+@[cimport, cheader, codename("klin_ble_gatt_chr_uuid16")]
 fn klin_ble_gatt_chr_uuid16(): i32
 
-@[cimport, codename("klin_ble_advertise")]
+@[cimport, cheader, codename("klin_ble_advertise")]
 fn klin_ble_advertise(name: str): i32
 
-@[cimport, codename("klin_ble_stop_advertise")]
+@[cimport, cheader, codename("klin_ble_stop_advertise")]
 fn klin_ble_stop_advertise(): i32
 
-@[cimport, codename("klin_ble_connected")]
+@[cimport, cheader, codename("klin_ble_connected")]
 fn klin_ble_connected(): i32
 
-@[cimport, codename("klin_ble_advertising")]
+@[cimport, cheader, codename("klin_ble_advertising")]
 fn klin_ble_advertising(): i32
 
-@[cimport, codename("klin_ble_wait_connected")]
+@[cimport, cheader, codename("klin_ble_wait_connected")]
 fn klin_ble_wait_connected(timeout_ms: i32): i32
 
-@[cimport, codename("klin_ble_stop")]
+@[cimport, cheader, codename("klin_ble_stop")]
 fn klin_ble_stop(): i32
 
-@[cimport, codename("klin_ble_gatt_set")]
+@[cimport, cheader, codename("klin_ble_gatt_set")]
 fn klin_ble_gatt_set(data: *u8, len: i32): i32
 
-@[cimport, codename("klin_ble_gatt_get")]
+@[cimport, cheader, codename("klin_ble_gatt_set_at")]
+fn klin_ble_gatt_set_at(index: i32, data: *u8, len: i32): i32
+
+@[cimport, cheader, codename("klin_ble_gatt_get")]
 fn klin_ble_gatt_get(out: *mut u8, max_len: i32): i32
 
-@[cimport, codename("klin_ble_gatt_len")]
+@[cimport, cheader, codename("klin_ble_gatt_get_at")]
+fn klin_ble_gatt_get_at(index: i32, out: *mut u8, max_len: i32): i32
+
+@[cimport, cheader, codename("klin_ble_gatt_len")]
 fn klin_ble_gatt_len(): i32
 
-@[cimport, codename("klin_ble_gatt_notify")]
+@[cimport, cheader, codename("klin_ble_gatt_len_at")]
+fn klin_ble_gatt_len_at(index: i32): i32
+
+@[cimport, cheader, codename("klin_ble_gatt_notify")]
 fn klin_ble_gatt_notify(): i32
 
-@[cimport, codename("klin_ble_gatt_written")]
+@[cimport, cheader, codename("klin_ble_gatt_notify_at")]
+fn klin_ble_gatt_notify_at(index: i32): i32
+
+@[cimport, cheader, codename("klin_ble_gatt_written")]
 fn klin_ble_gatt_written(): i32
 
-@[cimport, codename("klin_ble_scan_start")]
+@[cimport, cheader, codename("klin_ble_gatt_written_at")]
+fn klin_ble_gatt_written_at(index: i32): i32
+
+@[cimport, cheader, codename("klin_ble_scan_start")]
 fn klin_ble_scan_start(duration_ms: i32): i32
 
-@[cimport, codename("klin_ble_scan_stop")]
+@[cimport, cheader, codename("klin_ble_scan_stop")]
 fn klin_ble_scan_stop(): i32
 
-@[cimport, codename("klin_ble_scan_count")]
+@[cimport, cheader, codename("klin_ble_scan_count")]
 fn klin_ble_scan_count(): i32
 
-@[cimport, codename("klin_ble_scan_rssi")]
+@[cimport, cheader, codename("klin_ble_scan_rssi")]
 fn klin_ble_scan_rssi(index: i32): i32
 
-@[cimport, codename("klin_ble_scan_addr_type")]
+@[cimport, cheader, codename("klin_ble_scan_addr_type")]
 fn klin_ble_scan_addr_type(index: i32): i32
 
-@[cimport, codename("klin_ble_scan_addr")]
+@[cimport, cheader, codename("klin_ble_scan_addr")]
 fn klin_ble_scan_addr(index: i32, out6: *mut u8): i32
 
-@[cimport, codename("klin_ble_scan_name")]
+@[cimport, cheader, codename("klin_ble_scan_name")]
 fn klin_ble_scan_name(index: i32, out: *mut u8, max_len: i32): i32
 
-@[cimport, codename("klin_ble_central_connect")]
+@[cimport, cheader, codename("klin_ble_central_connect")]
 fn klin_ble_central_connect(index: i32, timeout_ms: i32): i32
 
-@[cimport, codename("klin_ble_central_connected")]
+@[cimport, cheader, codename("klin_ble_central_connected")]
 fn klin_ble_central_connected(): i32
 
-@[cimport, codename("klin_ble_central_wait_connected")]
+@[cimport, cheader, codename("klin_ble_central_wait_connected")]
 fn klin_ble_central_wait_connected(timeout_ms: i32): i32
 
-@[cimport, codename("klin_ble_central_disconnect")]
+@[cimport, cheader, codename("klin_ble_central_disconnect")]
 fn klin_ble_central_disconnect(): i32
 
-@[cimport, codename("klin_ble_gattc_discover")]
+@[cimport, cheader, codename("klin_ble_gattc_select")]
+fn klin_ble_gattc_select(index: i32): i32
+
+@[cimport, cheader, codename("klin_ble_gattc_uuid16")]
+fn klin_ble_gattc_uuid16(svc_uuid16: i32, chr_uuid16: i32): i32
+
+@[cimport, cheader, codename("klin_ble_gattc_uuid128")]
+fn klin_ble_gattc_uuid128(svc16: *u8, chr16: *u8): i32
+
+@[cimport, cheader, codename("klin_ble_gattc_discover")]
 fn klin_ble_gattc_discover(timeout_ms: i32): i32
 
-@[cimport, codename("klin_ble_gattc_ready")]
+@[cimport, cheader, codename("klin_ble_gattc_ready")]
 fn klin_ble_gattc_ready(): i32
 
-@[cimport, codename("klin_ble_gattc_read")]
+@[cimport, cheader, codename("klin_ble_gattc_read")]
 fn klin_ble_gattc_read(timeout_ms: i32): i32
 
-@[cimport, codename("klin_ble_gattc_write")]
+@[cimport, cheader, codename("klin_ble_gattc_write")]
 fn klin_ble_gattc_write(data: *u8, len: i32, timeout_ms: i32): i32
 
-@[cimport, codename("klin_ble_gattc_subscribe")]
+@[cimport, cheader, codename("klin_ble_gattc_subscribe")]
 fn klin_ble_gattc_subscribe(timeout_ms: i32): i32
 
-@[cimport, codename("klin_ble_gattc_notified")]
+@[cimport, cheader, codename("klin_ble_gattc_notified")]
 fn klin_ble_gattc_notified(): i32
 
-@[cimport, codename("klin_ble_gattc_get")]
+@[cimport, cheader, codename("klin_ble_gattc_get")]
 fn klin_ble_gattc_get(out: *mut u8, max_len: i32): i32
 
-@[cimport, codename("klin_ble_gattc_len")]
+@[cimport, cheader, codename("klin_ble_gattc_len")]
 fn klin_ble_gattc_len(): i32
 
-@[cimport, codename("klin_ble_bond_enable")]
+@[cimport, cheader, codename("klin_ble_bond_enable")]
 fn klin_ble_bond_enable(): i32
 
-@[cimport, codename("klin_ble_bond_passkey")]
+@[cimport, cheader, codename("klin_ble_bond_passkey")]
 fn klin_ble_bond_passkey(passkey: i32): i32
 
-@[cimport, codename("klin_ble_passkey")]
+@[cimport, cheader, codename("klin_ble_passkey")]
 fn klin_ble_passkey(): i32
 
-@[cimport, codename("klin_ble_passkey_action")]
+@[cimport, cheader, codename("klin_ble_passkey_action")]
 fn klin_ble_passkey_action(): i32
 
-@[cimport, codename("klin_ble_passkey_inject")]
+@[cimport, cheader, codename("klin_ble_passkey_inject")]
 fn klin_ble_passkey_inject(passkey: i32): i32
 
-@[cimport, codename("klin_ble_bond_start")]
+@[cimport, cheader, codename("klin_ble_bond_start")]
 fn klin_ble_bond_start(): i32
 
-@[cimport, codename("klin_ble_bonded")]
+@[cimport, cheader, codename("klin_ble_bonded")]
 fn klin_ble_bonded(): i32
 
-@[cimport, codename("klin_ble_wait_bonded")]
+@[cimport, cheader, codename("klin_ble_wait_bonded")]
 fn klin_ble_wait_bonded(timeout_ms: i32): i32
 
-@[cimport, codename("klin_ble_bond_count")]
+@[cimport, cheader, codename("klin_ble_bond_count")]
 fn klin_ble_bond_count(): i32
 
-@[cimport, codename("klin_ble_bond_clear")]
+@[cimport, cheader, codename("klin_ble_bond_clear")]
 fn klin_ble_bond_clear(): i32
 
 /// `ESP_OK` / NimBLE success (0).
@@ -166,9 +206,35 @@ pub fn scan_max(): i32 {
     return 16
 }
 
-/// Set 16-bit svc/chr UUIDs. Must run **before** `init` (default `0xFFF0`/`0xFFF1`).
+/// Set 16-bit svc/chr UUIDs on slot 0. Must run **before** `init`.
 pub fn gatt_uuid16(svc_uuid16: i32, chr_uuid16: i32): i32 {
     return klin_ble_gatt_uuid16(svc_uuid16, chr_uuid16)
+}
+
+/// Set 128-bit svc/chr on slot 0 (16 bytes LE each). Before `init`.
+pub fn gatt_uuid128(svc16: *u8, chr16: *u8): i32 {
+    return klin_ble_gatt_uuid128(svc16, chr16)
+}
+
+/// Append 16-bit svc/chr (max `gatt_svc_max()`). Before `init`.
+pub fn gatt_add_uuid16(svc_uuid16: i32, chr_uuid16: i32): i32 {
+    return klin_ble_gatt_add_uuid16(svc_uuid16, chr_uuid16)
+}
+
+pub fn gatt_add_uuid128(svc16: *u8, chr16: *u8): i32 {
+    return klin_ble_gatt_add_uuid128(svc16, chr16)
+}
+
+pub fn gatt_clear(): i32 {
+    return klin_ble_gatt_clear()
+}
+
+pub fn gatt_svc_count(): i32 {
+    return klin_ble_gatt_svc_count()
+}
+
+pub fn gatt_svc_max(): i32 {
+    return 4
 }
 
 pub fn init(): i32 {
@@ -205,20 +271,40 @@ pub fn gatt_set(data: *u8, len: i32): i32 {
     return klin_ble_gatt_set(data, len)
 }
 
+pub fn gatt_set_at(index: i32, data: *u8, len: i32): i32 {
+    return klin_ble_gatt_set_at(index, data, len)
+}
+
 pub fn gatt_get(out: *mut u8, max_len: i32): i32 {
     return klin_ble_gatt_get(out, max_len)
+}
+
+pub fn gatt_get_at(index: i32, out: *mut u8, max_len: i32): i32 {
+    return klin_ble_gatt_get_at(index, out, max_len)
 }
 
 pub fn gatt_len(): i32 {
     return klin_ble_gatt_len()
 }
 
+pub fn gatt_len_at(index: i32): i32 {
+    return klin_ble_gatt_len_at(index)
+}
+
 pub fn gatt_notify(): i32 {
     return klin_ble_gatt_notify()
 }
 
+pub fn gatt_notify_at(index: i32): i32 {
+    return klin_ble_gatt_notify_at(index)
+}
+
 pub fn gatt_written(): bool {
     return klin_ble_gatt_written() != 0
+}
+
+pub fn gatt_written_at(index: i32): bool {
+    return klin_ble_gatt_written_at(index) != 0
 }
 
 /// Blocking active scan for `duration_ms`. Stops advertising first.
@@ -269,7 +355,20 @@ pub fn central_disconnect(): i32 {
     return klin_ble_central_disconnect()
 }
 
-/// Discover peer svc `0xFFF0` / chr `0xFFF1` (blocking).
+/// Use server-table slot `index` UUIDs for the next `gattc_discover`.
+pub fn gattc_select(index: i32): i32 {
+    return klin_ble_gattc_select(index)
+}
+
+pub fn gattc_uuid16(svc_uuid16: i32, chr_uuid16: i32): i32 {
+    return klin_ble_gattc_uuid16(svc_uuid16, chr_uuid16)
+}
+
+pub fn gattc_uuid128(svc16: *u8, chr16: *u8): i32 {
+    return klin_ble_gattc_uuid128(svc16, chr16)
+}
+
+/// Discover peer svc/chr (blocking).
 pub fn gattc_discover(timeout_ms: i32): i32 {
     return klin_ble_gattc_discover(timeout_ms)
 }

@@ -1,0 +1,95 @@
+// ESP32-S3 multi-service + UUID128 via klin-lang/esp_ble @v0.8.0.
+// Two 16-bit services + one 128-bit service (max 4).
+//   make emit && make build && make flash
+import "../../esp_ble" ble
+
+@[cexport, codename("klin_app_main")]
+fn app_main_klin() {
+  let mut e = ble.gatt_clear()
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.gatt_add_uuid16(0xA001, 0xA002)
+  if e != ble.err_ok() {
+    return
+  }
+  e = ble.gatt_add_uuid16(0xB001, 0xB002)
+  if e != ble.err_ok() {
+    return
+  }
+
+  // Example 128-bit UUIDs (LE). Replace with your own.
+  let mut svc128: [16]u8
+  let mut chr128: [16]u8
+  svc128[0] = 1
+  svc128[1] = 2
+  svc128[2] = 3
+  svc128[3] = 4
+  svc128[4] = 5
+  svc128[5] = 6
+  svc128[6] = 7
+  svc128[7] = 8
+  svc128[8] = 9
+  svc128[9] = 10
+  svc128[10] = 11
+  svc128[11] = 12
+  svc128[12] = 13
+  svc128[13] = 14
+  svc128[14] = 15
+  svc128[15] = 16
+  chr128[0] = 0x10
+  chr128[1] = 0x11
+  chr128[2] = 0x12
+  chr128[3] = 0x13
+  chr128[4] = 0x14
+  chr128[5] = 0x15
+  chr128[6] = 0x16
+  chr128[7] = 0x17
+  chr128[8] = 0x18
+  chr128[9] = 0x19
+  chr128[10] = 0x1a
+  chr128[11] = 0x1b
+  chr128[12] = 0x1c
+  chr128[13] = 0x1d
+  chr128[14] = 0x1e
+  chr128[15] = 0x1f
+  e = ble.gatt_add_uuid128(cast(*u8, &svc128[0]), cast(*u8, &chr128[0]))
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.init()
+  if e != ble.err_ok() {
+    return
+  }
+
+  let mut a: [1]u8
+  a[0] = 1
+  let _s0 = ble.gatt_set_at(0, cast(*u8, &a[0]), 1)
+  a[0] = 2
+  let _s1 = ble.gatt_set_at(1, cast(*u8, &a[0]), 1)
+  a[0] = 3
+  let _s2 = ble.gatt_set_at(2, cast(*u8, &a[0]), 1)
+
+  e = ble.advertise("klin-multi")
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.wait_connected(120000)
+  if e != ble.err_ok() {
+    return
+  }
+
+  while ble.connected() {
+    let mut j: i32 = 0
+    while j < 20000000 {
+      j = j + 1
+    }
+  }
+}
+
+fn main() {
+  app_main_klin()
+}

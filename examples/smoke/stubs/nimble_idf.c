@@ -11,7 +11,16 @@ static int s_central;
 static uint16_t s_svc_u = 0xFFF0;
 static uint16_t s_chr_u = 0xFFF1;
 static int s_inited_stub;
+static int s_n_svc = 1;
 
+int klin_ble_gatt_clear(void)
+{
+    if (s_inited_stub) {
+        return -1;
+    }
+    s_n_svc = 0;
+    return 0;
+}
 int klin_ble_gatt_uuid16(int svc_uuid16, int chr_uuid16)
 {
     if (s_inited_stub) {
@@ -23,14 +32,65 @@ int klin_ble_gatt_uuid16(int svc_uuid16, int chr_uuid16)
     }
     s_svc_u = (uint16_t)svc_uuid16;
     s_chr_u = (uint16_t)chr_uuid16;
+    if (s_n_svc < 1) {
+        s_n_svc = 1;
+    }
     return 0;
 }
+int klin_ble_gatt_uuid128(const uint8_t *svc16, const uint8_t *chr16)
+{
+    (void)svc16;
+    (void)chr16;
+    if (s_inited_stub) {
+        return -1;
+    }
+    if (s_n_svc < 1) {
+        s_n_svc = 1;
+    }
+    s_svc_u = 0;
+    s_chr_u = 0;
+    return 0;
+}
+int klin_ble_gatt_add_uuid16(int svc_uuid16, int chr_uuid16)
+{
+    if (s_inited_stub || s_n_svc >= 4) {
+        return -1;
+    }
+    if (svc_uuid16 <= 0 || svc_uuid16 > 0xFFFF || chr_uuid16 <= 0 ||
+        chr_uuid16 > 0xFFFF) {
+        return -1;
+    }
+    if (s_n_svc == 0) {
+        s_svc_u = (uint16_t)svc_uuid16;
+        s_chr_u = (uint16_t)chr_uuid16;
+    }
+    s_n_svc++;
+    return 0;
+}
+int klin_ble_gatt_add_uuid128(const uint8_t *svc16, const uint8_t *chr16)
+{
+    (void)svc16;
+    (void)chr16;
+    if (s_inited_stub || s_n_svc >= 4) {
+        return -1;
+    }
+    if (s_n_svc == 0) {
+        s_svc_u = 0;
+        s_chr_u = 0;
+    }
+    s_n_svc++;
+    return 0;
+}
+int klin_ble_gatt_svc_count(void) { return s_n_svc > 0 ? s_n_svc : 1; }
 int klin_ble_gatt_svc_uuid16(void) { return (int)s_svc_u; }
 int klin_ble_gatt_chr_uuid16(void) { return (int)s_chr_u; }
 
 int klin_ble_init(void)
 {
     s_inited_stub = 1;
+    if (s_n_svc < 1) {
+        s_n_svc = 1;
+    }
     return 0;
 }
 int klin_ble_advertise(const char *name)
@@ -50,6 +110,11 @@ int klin_ble_stop(void) { return 0; }
 
 int klin_ble_gatt_set(const uint8_t *data, int len)
 {
+    return klin_ble_gatt_set_at(0, data, len);
+}
+int klin_ble_gatt_set_at(int index, const uint8_t *data, int len)
+{
+    (void)index;
     if (data == NULL || len < 0 || len > 20) {
         return -1;
     }
@@ -62,7 +127,12 @@ int klin_ble_gatt_set(const uint8_t *data, int len)
 
 int klin_ble_gatt_get(uint8_t *out, int max_len)
 {
+    return klin_ble_gatt_get_at(0, out, max_len);
+}
+int klin_ble_gatt_get_at(int index, uint8_t *out, int max_len)
+{
     int n;
+    (void)index;
     if (out == NULL || max_len < 0) {
         return -1;
     }
@@ -77,12 +147,27 @@ int klin_ble_gatt_get(uint8_t *out, int max_len)
 }
 
 int klin_ble_gatt_len(void) { return s_len; }
+int klin_ble_gatt_len_at(int index)
+{
+    (void)index;
+    return s_len;
+}
 int klin_ble_gatt_notify(void) { return 0; }
+int klin_ble_gatt_notify_at(int index)
+{
+    (void)index;
+    return 0;
+}
 int klin_ble_gatt_written(void)
 {
     int w = s_written;
     s_written = 0;
     return w;
+}
+int klin_ble_gatt_written_at(int index)
+{
+    (void)index;
+    return klin_ble_gatt_written();
 }
 
 int klin_ble_scan_start(int duration_ms)
@@ -146,6 +231,23 @@ int klin_ble_central_disconnect(void)
     return 0;
 }
 
+int klin_ble_gattc_select(int index)
+{
+    (void)index;
+    return 0;
+}
+int klin_ble_gattc_uuid16(int svc_uuid16, int chr_uuid16)
+{
+    (void)svc_uuid16;
+    (void)chr_uuid16;
+    return 0;
+}
+int klin_ble_gattc_uuid128(const uint8_t *svc16, const uint8_t *chr16)
+{
+    (void)svc16;
+    (void)chr16;
+    return 0;
+}
 int klin_ble_gattc_discover(int timeout_ms)
 {
     (void)timeout_ms;
