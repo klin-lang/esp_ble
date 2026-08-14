@@ -57,3 +57,8 @@ int klin_ble_bonded(void);
 int klin_ble_wait_bonded(int timeout_ms);
 int klin_ble_bond_count(void);
 int klin_ble_bond_clear(void);
+int klin_ble_privacy_enable(void);
+int klin_ble_privacy_disable(void);
+int klin_ble_privacy_enabled(void);
+int klin_ble_own_addr_type(void);
+int klin_ble_own_addr(uint8_t *out6);

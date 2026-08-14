@@ -9,6 +9,7 @@
 /// `@v0.6.0` custom 16-bit UUIDs via `gatt_uuid16` (before `init`).
 /// `@v0.7.0` passkey/PIN bonding via `bond_passkey` (MITM).
 /// `@v0.8.0` 128-bit UUID + up to 4 services (`gatt_add_*` / `gatt_*_at`).
+/// `@v0.9.0` LE privacy / host RPA (`privacy_enable` before advertise/scan).
 module esp_ble
 
 @[link("nimble_idf.c")]
@@ -183,6 +184,21 @@ fn klin_ble_bond_count(): i32
 
 @[cimport, cheader, codename("klin_ble_bond_clear")]
 fn klin_ble_bond_clear(): i32
+
+@[cimport, cheader, codename("klin_ble_privacy_enable")]
+fn klin_ble_privacy_enable(): i32
+
+@[cimport, cheader, codename("klin_ble_privacy_disable")]
+fn klin_ble_privacy_disable(): i32
+
+@[cimport, cheader, codename("klin_ble_privacy_enabled")]
+fn klin_ble_privacy_enabled(): i32
+
+@[cimport, cheader, codename("klin_ble_own_addr_type")]
+fn klin_ble_own_addr_type(): i32
+
+@[cimport, cheader, codename("klin_ble_own_addr")]
+fn klin_ble_own_addr(out6: *mut u8): i32
 
 /// `ESP_OK` / NimBLE success (0).
 pub fn err_ok(): i32 {
@@ -444,4 +460,26 @@ pub fn bond_count(): i32 {
 
 pub fn bond_clear(): i32 {
     return klin_ble_bond_clear()
+}
+
+/// Host RPA privacy. After `init`, before advertise/scan/connect.
+pub fn privacy_enable(): i32 {
+    return klin_ble_privacy_enable()
+}
+
+pub fn privacy_disable(): i32 {
+    return klin_ble_privacy_disable()
+}
+
+pub fn privacy_enabled(): bool {
+    return klin_ble_privacy_enabled() != 0
+}
+
+pub fn own_addr_type(): i32 {
+    return klin_ble_own_addr_type()
+}
+
+/// Copy 6-byte own BD_ADDR into `out6`.
+pub fn own_addr(out6: *mut u8): i32 {
+    return klin_ble_own_addr(out6)
 }

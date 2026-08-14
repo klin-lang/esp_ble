@@ -1,0 +1,48 @@
+// ESP32-S3 NimBLE privacy/RPA via klin-lang/esp_ble @v0.9.0.
+// privacy_enable after init, before advertise.
+//   make emit && make build && make flash
+import "../../esp_ble" ble
+
+@[cexport, codename("klin_app_main")]
+fn app_main_klin() {
+  let mut e = ble.init()
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.privacy_enable()
+  if e != ble.err_ok() {
+    return
+  }
+  if !ble.privacy_enabled() {
+    return
+  }
+
+  let mut addr: [6]u8
+  e = ble.own_addr(cast(*mut u8, &addr[0]))
+  if e != ble.err_ok() {
+    return
+  }
+  let _t = ble.own_addr_type()
+
+  e = ble.advertise("klin-rpa")
+  if e != ble.err_ok() {
+    return
+  }
+
+  e = ble.wait_connected(120000)
+  if e != ble.err_ok() {
+    return
+  }
+
+  while ble.connected() {
+    let mut i: i32 = 0
+    while i < 20000000 {
+      i = i + 1
+    }
+  }
+}
+
+fn main() {
+  app_main_klin()
+}

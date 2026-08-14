@@ -327,3 +327,32 @@ int klin_ble_bond_clear(void)
     s_bond_ok = 0;
     return 0;
 }
+
+static int s_privacy_stub;
+
+int klin_ble_privacy_enable(void)
+{
+    if (!s_inited_stub || s_central) {
+        return -1;
+    }
+    s_privacy_stub = 1;
+    return 0;
+}
+int klin_ble_privacy_disable(void)
+{
+    if (s_central) {
+        return -1;
+    }
+    s_privacy_stub = 0;
+    return 0;
+}
+int klin_ble_privacy_enabled(void) { return s_privacy_stub; }
+int klin_ble_own_addr_type(void) { return s_privacy_stub ? 1 : 0; }
+int klin_ble_own_addr(uint8_t *out6)
+{
+    if (out6 == NULL) {
+        return -1;
+    }
+    memcpy(out6, s_addr, 6);
+    return 0;
+}
