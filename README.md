@@ -2,43 +2,35 @@
 
 Thin **ESP-IDF NimBLE** bindings for [Klin](https://github.com/klin-lang/klin).
 
-## Status (`@v0.8.0`)
+## Status (`@v0.9.0`)
 
 | API | Notes |
 |---|---|
-| `gatt_uuid16` / `gatt_uuid128` | Slot 0 UUIDs before `init` |
-| `gatt_add_uuid16` / `gatt_add_uuid128` / `gatt_clear` | Up to **4** services (1 chr each) |
-| `gatt_set_at` / `gatt_get_at` / `gatt_notify_at` / `gatt_written_at` | Per-service index |
-| `gattc_select` / `gattc_uuid16` / `gattc_uuid128` | Client discover target |
-| Prior APIs | GAP / GATT / scan / client / bond / passkey unchanged |
+| `privacy_enable` / `privacy_disable` | Host RPA after `init`, before advertise/scan |
+| `privacy_enabled` / `own_addr_type` / `own_addr` | Query own address |
+| Prior APIs | GAP / GATT / multi-svc / UUID128 / client / bond / passkey |
 
-`version()` → `8`. Default remains svc **0xFFF0** / chr **0xFFF1** when unset.
+`version()` → `9`. Bonding already distributes IRK (`bond_enable` / `bond_passkey`) for peer resolution.
 
-## Usage (128-bit + two services)
+## Usage (privacy / RPA)
 
 ```klin
 import "github/klin-lang/esp_ble" ble
 
 @[cexport, codename("klin_app_main")]
 fn app() {
-  let mut e = ble.gatt_clear()
-  e = ble.gatt_add_uuid16(0xA001, 0xA002)
-  let mut svc: [16]u8
-  let mut chr: [16]u8
-  // fill LE 128-bit UUIDs…
-  e = ble.gatt_add_uuid128(cast(*u8, &svc[0]), cast(*u8, &chr[0]))
-  e = ble.init()
-  e = ble.advertise("klin-multi")
+  let mut e = ble.init()
+  e = ble.privacy_enable()
+  e = ble.advertise("klin-rpa")
 }
 ```
 
 ```sh
-klin get github/klin-lang/esp_ble@v0.8.0
+klin get github/klin-lang/esp_ble@v0.9.0
 ```
 
 ## Contract
 
-- Max **4** services; each has one R/W/Notify characteristic.
-- UUID table frozen at `init`.
-- 128-bit buffers are **16 bytes little-endian** (Bluetooth wire order).
-- Errors are `i32` (0 = OK).
+- Call `privacy_enable` **before** advertise / scan / connect (not while radio is active).
+- Host-based RPA (`ble_hs_pvcy_rpa_config`); rotation interval = IDF `CONFIG_BT_NIMBLE_RPA_TIMEOUT`.
+- No Klin GC / hidden heap. Errors are `i32` (0 = OK).

@@ -5,7 +5,9 @@
  * 16-bit or 128-bit UUIDs via gatt_uuid* / gatt_add_* before init.
  * Default single svc 0xFFF0 / chr 0xFFF1 when unset.
  * Central: scan + connect + gattc_discover (slot select or gattc_uuid*).
- * Bonding: Just Works or fixed passkey. Mesh later.
+ * Bonding: Just Works or fixed passkey.
+ * Privacy: host RPA via privacy_enable (after init, before advertise/scan).
+ * Mesh later.
  */
 #pragma once
 
@@ -102,6 +104,19 @@ int klin_ble_bonded(void);
 int klin_ble_wait_bonded(int timeout_ms);
 int klin_ble_bond_count(void);
 int klin_ble_bond_clear(void);
+
+/**
+ * Enable LE privacy (host RPA). After `init`, before advertise/scan/connect.
+ * Sets own address type to random; rotates per NimBLE RPA timeout.
+ */
+int klin_ble_privacy_enable(void);
+/** Disable privacy; restore public/static inference. Before advertise/scan. */
+int klin_ble_privacy_disable(void);
+int klin_ble_privacy_enabled(void);
+/** Current own address type (`BLE_OWN_ADDR_*`). */
+int klin_ble_own_addr_type(void);
+/** Copy 6-byte own address into `out6`. */
+int klin_ble_own_addr(uint8_t *out6);
 
 #ifdef __cplusplus
 }

@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "host/ble_hs.h"
+#include "host/ble_hs_pvcy.h"
 #include "host/ble_sm.h"
 #include "host/ble_store.h"
 #include "host/ble_uuid.h"
@@ -91,6 +92,7 @@ static int s_bonded; /* current link encrypted+bonded after ENC_CHANGE */
 static int s_passkey_mode;
 static uint32_t s_passkey;
 static int s_passkey_action; /* last BLE_SM_IOACT_* seen */
+static int s_privacy; /* host RPA enabled via privacy_enable */
 
 /* Server GATT table (max KLIN_BLE_GATT_SVC_MAX). Built before init. */
 static klin_ble_gatt_slot_t s_slots[KLIN_BLE_GATT_SVC_MAX];
@@ -744,15 +746,30 @@ static void klin_ble_on_sync(void)
 {
     int rc;
 
-    rc = ble_hs_util_ensure_addr(0);
-    if (rc != 0) {
-        printf("klin_ble: ensure_addr rc=%d\n", rc);
-        return;
-    }
-    rc = ble_hs_id_infer_auto(0, &s_own_addr_type);
-    if (rc != 0) {
-        printf("klin_ble: infer_addr rc=%d\n", rc);
-        return;
+    if (s_privacy) {
+        /* Re-apply after controller reset/sync. */
+        rc = ble_hs_pvcy_rpa_config(1);
+        if (rc != 0) {
+            printf("klin_ble: pvcy_rpa_config rc=%d\n", rc);
+            return;
+        }
+        rc = ble_hs_util_ensure_addr(1);
+        if (rc != 0) {
+            printf("klin_ble: ensure_addr(random) rc=%d\n", rc);
+            return;
+        }
+        s_own_addr_type = BLE_OWN_ADDR_RANDOM;
+    } else {
+        rc = ble_hs_util_ensure_addr(0);
+        if (rc != 0) {
+            printf("klin_ble: ensure_addr rc=%d\n", rc);
+            return;
+        }
+        rc = ble_hs_id_infer_auto(0, &s_own_addr_type);
+        if (rc != 0) {
+            printf("klin_ble: infer_addr rc=%d\n", rc);
+            return;
+        }
     }
 
     s_synced = 1;
@@ -825,6 +842,7 @@ int klin_ble_init(void)
     s_passkey_mode = 0;
     s_passkey = 0;
     s_passkey_action = 0;
+    s_privacy = 0;
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_central_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_gattc_sel = 0;
@@ -1794,4 +1812,98 @@ int klin_ble_gattc_uuid128(const uint8_t *svc16, const uint8_t *chr16)
     memcpy(s_gattc_chr128.value, chr16, 16);
     s_gattc_override = 1;
     return (int)ESP_OK;
+}
+
+/**
+ * Enable host-based RPA privacy. Call after `init`, before advertise/scan/connect.
+ * Own address type becomes BLE_OWN_ADDR_RANDOM; NimBLE rotates RPA on timeout.
+ */
+int klin_ble_privacy_enable(void)
+{
+    int rc;
+
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (s_advertising || s_scanning || s_connected || s_central_connected) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+
+    rc = klin_ble_wait_sync();
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ble_hs_pvcy_rpa_config(1);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = ble_hs_util_ensure_addr(1);
+    if (rc != 0) {
+        return rc;
+    }
+    s_own_addr_type = BLE_OWN_ADDR_RANDOM;
+    s_privacy = 1;
+    return (int)ESP_OK;
+}
+
+/** Disable privacy; restore public/static address inference. */
+int klin_ble_privacy_disable(void)
+{
+    int rc;
+
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (s_advertising || s_scanning || s_connected || s_central_connected) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+
+    rc = klin_ble_wait_sync();
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ble_hs_pvcy_rpa_config(0);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = ble_hs_util_ensure_addr(0);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = ble_hs_id_infer_auto(0, &s_own_addr_type);
+    if (rc != 0) {
+        return rc;
+    }
+    s_privacy = 0;
+    return (int)ESP_OK;
+}
+
+int klin_ble_privacy_enabled(void)
+{
+    return s_privacy ? 1 : 0;
+}
+
+int klin_ble_own_addr_type(void)
+{
+    return (int)s_own_addr_type;
+}
+
+int klin_ble_own_addr(uint8_t *out6)
+{
+    int rc;
+
+    if (out6 == NULL) {
+        return (int)ESP_ERR_INVALID_ARG;
+    }
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    rc = klin_ble_wait_sync();
+    if (rc != 0) {
+        return rc;
+    }
+    rc = ble_hs_id_copy_addr(s_own_addr_type, out6, NULL);
+    return rc;
 }
