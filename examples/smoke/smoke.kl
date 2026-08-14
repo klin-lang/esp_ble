@@ -194,7 +194,32 @@ fn main() {
   if e != ble.err_ok() {
     return
   }
-  if ble.version() != 9 {
+  e = ble.mesh_enable()
+  if e != ble.err_ok() {
+    return
+  }
+  if !ble.mesh_enabled() {
+    return
+  }
+  if !ble.mesh_provisioned() {
+    return
+  }
+  if ble.mesh_primary_addr() == 0 {
+    return
+  }
+  e = ble.mesh_onoff_set(1)
+  if e != ble.err_ok() {
+    return
+  }
+  if !ble.mesh_onoff_changed() {
+    return
+  }
+  if ble.mesh_onoff() != 1 {
+    return
+  }
+  let _oob = ble.mesh_oob_number()
+  let _mr = ble.mesh_reset()
+  if ble.version() != 10 {
     return
   }
   let _m = ble.scan_max()

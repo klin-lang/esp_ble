@@ -356,3 +356,40 @@ int klin_ble_own_addr(uint8_t *out6)
     memcpy(out6, s_addr, 6);
     return 0;
 }
+
+static int s_mesh_on;
+static int s_mesh_prov;
+static int s_mesh_onoff;
+static int s_mesh_onoff_ch;
+
+int klin_ble_mesh_enable(void)
+{
+    if (!s_inited_stub) {
+        return -1;
+    }
+    s_mesh_on = 1;
+    s_mesh_prov = 1;
+    return 0;
+}
+int klin_ble_mesh_enabled(void) { return s_mesh_on; }
+int klin_ble_mesh_provisioned(void) { return s_mesh_prov; }
+int klin_ble_mesh_primary_addr(void) { return s_mesh_prov ? 2 : 0; }
+int klin_ble_mesh_onoff(void) { return s_mesh_onoff; }
+int klin_ble_mesh_onoff_set(int onoff)
+{
+    s_mesh_onoff = onoff ? 1 : 0;
+    s_mesh_onoff_ch = 1;
+    return 0;
+}
+int klin_ble_mesh_onoff_changed(void)
+{
+    int c = s_mesh_onoff_ch;
+    s_mesh_onoff_ch = 0;
+    return c;
+}
+int klin_ble_mesh_oob_number(void) { return 0; }
+int klin_ble_mesh_reset(void)
+{
+    s_mesh_prov = 0;
+    return 0;
+}

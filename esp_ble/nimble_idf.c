@@ -22,6 +22,16 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
+#if defined(CONFIG_BT_NIMBLE_MESH) && CONFIG_BT_NIMBLE_MESH
+#include "mesh/mesh.h"
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#endif
+#ifndef BT_MESH_MODEL_NONE
+#define BT_MESH_MODEL_NONE ((struct bt_mesh_model *)NULL)
+#endif
+#endif
+
 void ble_store_config_init(void);
 
 #define KLIN_BLE_SYNC_BIT           BIT0
@@ -815,6 +825,9 @@ int klin_ble_init(void)
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
+#if defined(CONFIG_BT_NIMBLE_MESH) && CONFIG_BT_NIMBLE_MESH
+    bt_mesh_register_gatt();
+#endif
 
     klin_ble_build_gatt_svcs();
     rc = ble_gatts_count_cfg(s_gatt_svcs);
@@ -1907,3 +1920,257 @@ int klin_ble_own_addr(uint8_t *out6)
     rc = ble_hs_id_copy_addr(s_own_addr_type, out6, NULL);
     return rc;
 }
+
+/* ---- NimBLE Mesh node (Gen OnOff) — requires CONFIG_BT_NIMBLE_MESH ---- */
+
+#if defined(CONFIG_BT_NIMBLE_MESH) && CONFIG_BT_NIMBLE_MESH
+
+#define KLIN_MESH_CID_VENDOR 0x05C3
+
+static int s_mesh_on;
+static int s_mesh_inited;
+static uint16_t s_mesh_primary;
+static uint8_t s_mesh_onoff;
+static int s_mesh_onoff_changed;
+static uint32_t s_mesh_oob;
+static uint8_t s_mesh_dev_uuid[16];
+
+static struct bt_mesh_model_pub s_health_pub;
+static struct bt_mesh_model_pub s_onoff_pub;
+static struct bt_mesh_health_srv s_health_srv;
+
+static void klin_mesh_health_pub_init(void)
+{
+    s_health_pub.msg = BT_MESH_HEALTH_FAULT_MSG(0);
+}
+
+static void klin_mesh_onoff_status(struct bt_mesh_model *model,
+                                  struct bt_mesh_msg_ctx *ctx)
+{
+    struct os_mbuf *msg = NET_BUF_SIMPLE(3);
+    uint8_t *status;
+
+    bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x04));
+    status = net_buf_simple_add(msg, 1);
+    *status = s_mesh_onoff;
+    (void)bt_mesh_model_send(model, ctx, msg, NULL, NULL);
+    os_mbuf_free_chain(msg);
+}
+
+static void klin_mesh_onoff_get(struct bt_mesh_model *model,
+                               struct bt_mesh_msg_ctx *ctx,
+                               struct os_mbuf *buf)
+{
+    (void)buf;
+    klin_mesh_onoff_status(model, ctx);
+}
+
+static void klin_mesh_onoff_set(struct bt_mesh_model *model,
+                               struct bt_mesh_msg_ctx *ctx,
+                               struct os_mbuf *buf)
+{
+    s_mesh_onoff = buf->om_data[0] ? 1 : 0;
+    s_mesh_onoff_changed = 1;
+    klin_mesh_onoff_status(model, ctx);
+}
+
+static void klin_mesh_onoff_set_unack(struct bt_mesh_model *model,
+                                     struct bt_mesh_msg_ctx *ctx,
+                                     struct os_mbuf *buf)
+{
+    (void)model;
+    (void)ctx;
+    s_mesh_onoff = buf->om_data[0] ? 1 : 0;
+    s_mesh_onoff_changed = 1;
+}
+
+static const struct bt_mesh_model_op s_onoff_op[] = {
+    {BT_MESH_MODEL_OP_2(0x82, 0x01), 0, (void *)klin_mesh_onoff_get},
+    {BT_MESH_MODEL_OP_2(0x82, 0x02), 2, (void *)klin_mesh_onoff_set},
+    {BT_MESH_MODEL_OP_2(0x82, 0x03), 2, (void *)klin_mesh_onoff_set_unack},
+    BT_MESH_MODEL_OP_END,
+};
+
+static struct bt_mesh_model s_root_models[] = {
+    BT_MESH_MODEL_CFG_SRV,
+    BT_MESH_MODEL_HEALTH_SRV(&s_health_srv, &s_health_pub),
+    BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_SRV, s_onoff_op, &s_onoff_pub,
+                  NULL),
+};
+
+static struct bt_mesh_elem s_elements[] = {
+    BT_MESH_ELEM(0, s_root_models, BT_MESH_MODEL_NONE),
+};
+
+static const struct bt_mesh_comp s_comp = {
+    .cid = KLIN_MESH_CID_VENDOR,
+    .elem = s_elements,
+    .elem_count = ARRAY_SIZE(s_elements),
+};
+
+static int klin_mesh_output_number(bt_mesh_output_action_t action, uint32_t number)
+{
+    (void)action;
+    s_mesh_oob = number;
+    return 0;
+}
+
+static void klin_mesh_prov_complete(uint16_t net_idx, uint16_t addr)
+{
+    (void)net_idx;
+    s_mesh_primary = addr;
+}
+
+static struct bt_mesh_prov s_prov = {
+    .uuid = s_mesh_dev_uuid,
+    .output_size = 4,
+    .output_actions = BT_MESH_DISPLAY_NUMBER,
+    .output_number = klin_mesh_output_number,
+    .complete = klin_mesh_prov_complete,
+};
+
+int klin_ble_mesh_enable(void)
+{
+    ble_addr_t addr;
+    int rc;
+
+    if (!s_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    if (s_mesh_inited) {
+        s_mesh_on = 1;
+        return (int)ESP_OK;
+    }
+
+    rc = klin_ble_wait_sync();
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (s_advertising) {
+        (void)klin_ble_stop_advertise();
+    }
+
+    /* Device UUID: 16 bytes from public/identity address + pad. */
+    memset(s_mesh_dev_uuid, 0, sizeof(s_mesh_dev_uuid));
+    rc = ble_hs_id_copy_addr(BLE_ADDR_PUBLIC, &s_mesh_dev_uuid[2], NULL);
+    if (rc != 0) {
+        rc = ble_hs_id_copy_addr(BLE_ADDR_RANDOM, &s_mesh_dev_uuid[2], NULL);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+
+    klin_mesh_health_pub_init();
+
+    /* NRPA for mesh identity (Espressif NimBLE mesh example pattern). */
+    rc = ble_hs_id_gen_rnd(1, &addr);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = ble_hs_id_set_rnd(addr.val);
+    if (rc != 0) {
+        return rc;
+    }
+    s_own_addr_type = addr.type;
+
+    rc = bt_mesh_init(addr.type, &s_prov, &s_comp);
+    if (rc != 0) {
+        return rc;
+    }
+    s_mesh_inited = 1;
+    s_mesh_on = 1;
+
+    if (bt_mesh_is_provisioned()) {
+        s_mesh_primary = bt_mesh_primary_addr();
+    } else {
+        rc = bt_mesh_prov_enable(BT_MESH_PROV_ADV | BT_MESH_PROV_GATT);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return (int)ESP_OK;
+}
+
+int klin_ble_mesh_enabled(void)
+{
+    return s_mesh_on ? 1 : 0;
+}
+
+int klin_ble_mesh_provisioned(void)
+{
+    if (!s_mesh_inited) {
+        return 0;
+    }
+    return bt_mesh_is_provisioned() ? 1 : 0;
+}
+
+int klin_ble_mesh_primary_addr(void)
+{
+    if (!s_mesh_inited || !bt_mesh_is_provisioned()) {
+        return 0;
+    }
+    if (s_mesh_primary == 0) {
+        s_mesh_primary = bt_mesh_primary_addr();
+    }
+    return (int)s_mesh_primary;
+}
+
+int klin_ble_mesh_onoff(void)
+{
+    return (int)s_mesh_onoff;
+}
+
+int klin_ble_mesh_onoff_set(int onoff)
+{
+    if (!s_mesh_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    s_mesh_onoff = onoff ? 1 : 0;
+    s_mesh_onoff_changed = 1;
+    return (int)ESP_OK;
+}
+
+int klin_ble_mesh_onoff_changed(void)
+{
+    int c = s_mesh_onoff_changed;
+    s_mesh_onoff_changed = 0;
+    return c;
+}
+
+int klin_ble_mesh_oob_number(void)
+{
+    return (int)s_mesh_oob;
+}
+
+int klin_ble_mesh_reset(void)
+{
+    if (!s_mesh_inited) {
+        return (int)ESP_ERR_INVALID_STATE;
+    }
+    bt_mesh_reset();
+    s_mesh_primary = 0;
+    s_mesh_oob = 0;
+    return (int)ESP_OK;
+}
+
+#else /* !CONFIG_BT_NIMBLE_MESH */
+
+int klin_ble_mesh_enable(void)
+{
+    return (int)ESP_ERR_NOT_SUPPORTED;
+}
+int klin_ble_mesh_enabled(void) { return 0; }
+int klin_ble_mesh_provisioned(void) { return 0; }
+int klin_ble_mesh_primary_addr(void) { return 0; }
+int klin_ble_mesh_onoff(void) { return 0; }
+int klin_ble_mesh_onoff_set(int onoff)
+{
+    (void)onoff;
+    return (int)ESP_ERR_NOT_SUPPORTED;
+}
+int klin_ble_mesh_onoff_changed(void) { return 0; }
+int klin_ble_mesh_oob_number(void) { return 0; }
+int klin_ble_mesh_reset(void) { return (int)ESP_ERR_NOT_SUPPORTED; }
+
+#endif /* CONFIG_BT_NIMBLE_MESH */
